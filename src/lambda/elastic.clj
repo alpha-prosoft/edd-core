@@ -19,7 +19,7 @@
                      :query      ""
                      :headers    {"Host"         (:url elastic-search)
                                   "Content-Type" "application/json"
-                                  "X-Amz-Date"   (common/create-date)}
+                                  "X-Amz-Date" (common/create-date)}
                      :service    "es"
                      :region     (:region aws)
                      :access-key (:aws-access-key-id aws)
