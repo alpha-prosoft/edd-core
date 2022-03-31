@@ -301,6 +301,9 @@
          dependencies (fetch-dependencies-for-command ctx cmd)
          ctx (merge dependencies ctx)
          {:keys [id] :as cmd} (resolve-command-id-with-id-fn ctx cmd)]
+     (when-not id
+       (throw (ex-info "Id is not provided and cannot be resolved"
+                       {:error [{:id ["missing required key"]}]})))
      (when-not handler
        (throw (ex-info "Missing command handler"
                        {:cmd-id (:cmd-id cmd)})))

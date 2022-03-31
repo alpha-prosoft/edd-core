@@ -6,10 +6,10 @@
             [edd.el.event :as event]
             [edd.el.query :as query]
             [lambda.util :as util]
+            [edd.view-store.common :as view-store]
             [malli.error :as me]
             [malli.core :as m]
             [edd.dal :as dal]
-            [edd.search :as search]
             [edd.ctx :as edd-ctx]))
 
 (def EddCoreRegCmd
@@ -59,9 +59,7 @@
         options (update options
                         :consumes
                         #(s/merge-cmd-schema % cmd-id))
-        options (assoc options :handler (when reg-fn
-                                          (fn [& rest]
-                                            (apply reg-fn rest))))]
+        options (assoc options :handler reg-fn)]
 
     (when (:dps input-options)
       (log/warn ":dps is deprecated and will be removed in future"))
@@ -239,7 +237,7 @@
                     :invocation-id  (:invocation-id ctx)
                     :request-id     (:request-id item)
                     :interaction-id (:interaction-id ctx)}
-              :else {:exception (try-parse-exception e)
+              :else {:exception      (try-parse-exception e)
                      :invocation-id  (:invocation-id ctx)
                      :request-id     (:request-id item)
                      :interaction-id (:interaction-id ctx)})))))))
@@ -310,7 +308,7 @@
 
 (defn with-stores
   [ctx body-fn]
-  (search/with-init
+  (view-store/with-init
     ctx
     #(dal/with-init
        % body-fn)))

@@ -25,12 +25,16 @@
             [edd.common :as common]
             [lambda.uuid :as uuid]
             [edd.memory.event-store :as event-store]
-            [edd.memory.view-store :as view-store]
+            [edd.view-store.elastic :as elastic-view-store]
+            [edd.view-store.s3 :as s3-view-store]
             [lambda.test.fixture.client :as client]
-            [lambda.test.fixture.state :refer [*dal-state* *queues*]]
+            [lambda.test.fixture.state :refer [*queues*]]
             [lambda.request :as request]
             [edd.el.query :as query]
-            [aws.aws :as aws]))
+            [aws.aws :as aws]
+            [edd.view-store.impl.elastic.mock :as elastic-mock]
+            [edd.ctx :as edd-ctx]
+            [lambda.ctx :as lambda-ctx]))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Data Access Layer ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -83,12 +87,28 @@
    :command-store   []
    :aggregate-store []})
 
+(def service-name :local-test)
+
+(def ctx
+  (-> {:service-name service-name}
+      (response-cache/register-default)
+      (elastic-view-store/register :implementation :mock)
+      (event-store/register)))
+
+(def mock-s3-ctx
+  (-> {:service-name service-name}
+      (response-cache/register-default)
+      (s3-view-store/register :implementation :mock)
+      (event-store/register)))
+
+(def current-ctx)
+
 (defn create-identity
-  [& [id]]
-  (get-in @*dal-state* [:identities (keyword id)] (uuid/gen)))
+  [identities & [id]]
+  (get identities id (uuid/gen)))
 
 (defn prepare-dps-calls
-  []
+  [deps]
   (mapv
    (fn [%]
      (let [req {:query
@@ -103,62 +123,83 @@
             :body (util/to-json {:result (:resp %)})
             :req  req-2})))
 
-   (get @*dal-state* :dps [])))
+   deps))
 
 (defn aws-get-token
   [ctx]
   "#mock-id-token")
 
-(def ctx
-  (-> {}
-      (response-cache/register-default)
-      (view-store/register)
-      (event-store/register)))
-
 (defn mock-snapshot
   [_ _]
   nil)
 
-(defmacro with-mock-dal [& body]
-  `(edd/with-stores
-     ctx
-     #(binding [*dal-state* (atom (util/fix-keys
-                                   ~(if (map? (first body))
-                                      (merge
-                                       default-db
-                                       (dissoc (first body) :seed))
-                                      default-db)))
-                *queues* {:command-queue (atom [])
-                          :seed          ~(if (and (map? (first body)) (:seed (first body)))
-                                            (:seed (first body))
-                                            '(rand-int 10000000))}
-                util/*cache* (atom {})
-                request/*request* (atom {})]
-        %
-        (client/mock-http
-         (vec (concat (prepare-dps-calls)
-                      (get @*dal-state* :responses [])))
-         (with-redefs
-          [aws/get-token aws-get-token
-           common/create-identity create-identity]
-           (do (log/info "with-mock-dal using seed" (:seed *queues*))
-               ~@body))))))
+(defmacro with-mock-dal [dal-ctx & body]
+  `(let [dal-ctx# ~dal-ctx
+         ~'current-ctx dal-ctx#]
+     (do
+       (when-not (map? dal-ctx#)
+         (throw (ex-info (str "dal-ctx handled to mock-dal is not map and I guess "
+                              "it is not ctx actually. Please provide ctx")
+                         {:error        "CTX is required"
+                          :current-type (type dal-ctx#)})))
+       (when-not (:edd-event-store dal-ctx#)
+         (throw (ex-info (str "dal-ctx is map but looks like not ctx map. Did you just provide "
+                              "default values but not ctx? I'm missing registered event store in map! "
+                              "Anyway, sorry for making breaking change but please provide proper ctx "
+                              "as first argument of with-mock-dal and then assoc or merge default values. "
+                              "Thank you!")
+                         {:error         "CTX is required"
+                          :provided-keys (keys dal-ctx#)})))
+
+       (binding [*queues* {:command-queue (atom [])
+                           :seed          ~(if (and (map? (first body)) (:seed (first body)))
+                                             (:seed (first body))
+                                             '(rand-int 10000000))}
+                 util/*cache* (atom {})
+                 request/*request* (atom {})]
+
+         (let [deps# (-> (get dal-ctx# :deps (get dal-ctx# :dps []))
+                         (prepare-dps-calls)
+                         (concat (get dal-ctx# :responses []))
+                         (vec))
+               identities# (get dal-ctx# :identities {})]
+           (client/mock-http-ctx
+            dal-ctx#
+            deps#
+            (with-redefs
+             [aws/get-token aws-get-token
+              common/create-identity (partial create-identity identities#)]
+              (log/info "with-mock-dal using seed" (:seed *queues*))
+              (edd/with-stores
+                dal-ctx#
+                #(do % ~@body)))))))))
 
 (defmacro verify-state [x & [y]]
   `(if (keyword? ~y)
-     (is (= ~x (into [] (~y @*dal-state*))))
-     (is (= ~y (into [] (~x @*dal-state*))))))
+     (is (= ~x (into [] (~y @(event-store/get-db current-ctx)))))
+     (is (= ~y (into [] (~x @(event-store/get-db current-ctx)))))))
 
 (defmacro verify-state-fn [x fn y]
   `(is (= ~y (mapv
               ~fn
-              (~x @*dal-state*)))))
+              (~x @(event-store/get-db current-ctx))))))
+
+(defmacro verify-db
+  [state-ctx x y]
+  `(do (println (edd-ctx/get-realm ~state-ctx))
+       (println (lambda-ctx/get-service-name ~state-ctx))
+       (is (= ~y
+              (->> (~x @(event-store/get-db ~state-ctx))
+                   (filter
+                    #(and (= (:realm %) (edd-ctx/get-realm ~state-ctx))
+                          (= (:service-name %) (lambda-ctx/get-service-name ~state-ctx))))
+                   (mapv :data))))))
 
 (defn pop-state
   "Retrieves commands and removes them from the store"
   [x]
-  (let [current-state (x @*dal-state*)]
-    (swap! *dal-state*
+  (let [current-state (x @(event-store/get-db current-ctx))]
+    (swap! (event-store/get-db current-ctx)
            #(update % x (fn [v] [])))
     current-state))
 
@@ -166,8 +207,9 @@
   "Retrieves the first command without removing it from the store"
   [& x]
   (if x
-    ((first x) @*dal-state*)
-    @*dal-state*))
+    ((first x) @(event-store/get-db current-ctx))
+    (dissoc @(event-store/get-db current-ctx)
+            :global)))
 
 (defn- re-parse
   "Sometimes we parse things from outside differently

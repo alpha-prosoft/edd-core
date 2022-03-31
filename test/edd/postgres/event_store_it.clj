@@ -1,10 +1,9 @@
 (ns edd.postgres.event-store-it
   (:require [clojure.test :refer :all]
             [edd.postgres.event-store :as event-store]
-            [edd.commands-batch-test :as batch-test]
             [lambda.test.fixture.client :refer [verify-traffic-edn]]
-            [edd.memory.view-store :as view-store]
-            [lambda.test.fixture.state :refer [*dal-state*]]
+            [edd.view-store.elastic :as view-store]
+            [edd.memory.event-store :refer [*dal-state*]]
             [edd.core :as edd]
             [lambda.uuid :as uuid]
             [edd.test.fixture.dal :as mock]
@@ -36,7 +35,7 @@
                    :aws-secret-access-key (util/get-env "AWS_SECRET_ACCESS_KEY")
                    :aws-session-token     (util/get-env "AWS_SESSION_TOKEN")})
       (event-store/register)
-      (view-store/register)
+      (view-store/register :implementation :mock)
       (edd/reg-cmd :cmd-1 (fn [ctx cmd]
                             [{:identity (:id cmd)}
                              {:sequence (:id cmd)}
@@ -360,12 +359,11 @@
         account-id (util/get-env "AccountId" "local")
         ctx (-> mock/ctx
                 (event-store/register)
-                (view-store/register)
+                (view-store/register :implementation :mock)
                 (dissoc :response-cache)
                 (edd.response.s3/register)
                 (with-realm)
                 (assoc :aws {:aws-session-token "tok"})
-                (assoc :service-name "retry-test")
                 (edd/reg-cmd :error-prone (fn [ctx cmd]
                                             [{:sequence (:id cmd)}
                                              {:event-id :error-prone-event

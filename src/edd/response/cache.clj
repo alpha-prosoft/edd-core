@@ -1,6 +1,5 @@
 (ns edd.response.cache
   (:require [clojure.tools.logging :as log]
-            [lambda.test.fixture.state :as state]
             [clojure.string :as str]))
 
 (defmulti cache-response
@@ -22,7 +21,6 @@
                  (when idx
                    (str "-part." idx))
                  ".json")]
-    (swap! state/*dal-state* assoc key resp)
     {:key key}))
 
 (defn register-default

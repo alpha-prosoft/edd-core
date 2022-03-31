@@ -7,7 +7,7 @@
             [edd.el.cmd :as cmd]
             [edd.el.event :as event]
             [edd.el.query :as query]
-            [edd.elastic.view-store :as elastic-view-store]
+            [edd.view-store.elastic :as elastic-view-store]
             [edd.memory.event-store :as event-store]
             [edd.search :as search]
             [edd.test.fixture.dal :as mock]
@@ -110,12 +110,14 @@
 
 (deftest handler-builder-test
   "Test if id-fn works correctly together with event seq. This test does multiple things. Sorry!!"
-  (mock/with-mock-dal
-    (is (= {:error "Some error"}
-           (mock/handle-cmd
-            (prepare {})
-            {:commands [{:cmd-id :error-cmd
-                         :id     cmd-id}]})))))
+  (let [ctx (prepare {})]
+    (mock/with-mock-dal
+      ctx
+      (is (= {:error "Some error"}
+             (mock/handle-cmd
+              ctx
+              {:commands [{:cmd-id :error-cmd
+                           :id     cmd-id}]}))))))
 
 (deftest test-error-response
   "Test if id-fn works correctly together with event seq. This test does multiple things. Sorry!!"
@@ -125,117 +127,121 @@
                                                            cmd-id-2 5
                                                            cmd-id-3 9}
                                                           id))]
-    (mock/with-mock-dal
-      {:event-store
-       [{:event-id  :cmd-id
-         :id        cmd-id
-         :event-seq 21}
-        {:event-id  :cmd-id
-         :id        dps-id
-         :event-seq 31}
-        {:event-id  :cmd-id
-         :id        cmd-id-2
-         :event-seq 5}
-        {:event-id  :cmd-id
-         :id        cmd-id-3
-         :event-seq 9}]}
-      (let [resp (mock/handle-cmd
-                  (-> (prepare {})
-                      (edd/reg-query :test-query (fn [_ _] {:id dps-id})))
-                  multi-command-request)]
-        (mock/verify-state :event-store [{:event-id  :cmd-id
-                                          :id        cmd-id-2
-                                          :event-seq 5}
-                                         {:event-id  :dummy-event-1
-                                          :handled   true
-                                          :event-seq 6
-                                          :meta      {}
-                                          :id        cmd-id-2}
-                                         {:event-id  :dummy-event-2
-                                          :handled   true
-                                          :event-seq 7
-                                          :meta      {}
-                                          :id        cmd-id-2}
-                                         {:event-id  :cmd-id
-                                          :id        cmd-id-3
-                                          :event-seq 9}
-                                         {:event-id  :cmd-id
-                                          :id        cmd-id
-                                          :event-seq 21}
-                                         {:event-id  :dummy-event
-                                          :handled   true
-                                          :event-seq 22
-                                          :meta      {}
-                                          :id        cmd-id}
-                                         {:event-id  :cmd-id
-                                          :id        dps-id
-                                          :event-seq 31}
-                                         {:event-id  :dummy-event-3
-                                          :handled   true
-                                          :event-seq 32
-                                          :meta      {}
-                                          :id        dps-id}])
-        (is (= {:effects    [{:cmd-id       :fx-command
-                              :id           #uuid "22222111-1111-1111-1111-111111111111"
-                              :service-name :local-test}]
-                :events     4
-                :identities 0
-                :meta       [{:dummy-cmd {:id cmd-id}}
-                             {:dummy-cmd-2 {:id cmd-id-2}}
-                             {:dummy-cmd-3 {:id dps-id}}]
-                :sequences  0
-                :success    true}
-               resp))))))
+    (let [ctx (prepare {})]
+      (mock/with-mock-dal
+        (assoc ctx
+               :event-store
+               [{:event-id  :cmd-id
+                 :id        cmd-id
+                 :event-seq 21}
+                {:event-id  :cmd-id
+                 :id        dps-id
+                 :event-seq 31}
+                {:event-id  :cmd-id
+                 :id        cmd-id-2
+                 :event-seq 5}
+                {:event-id  :cmd-id
+                 :id        cmd-id-3
+                 :event-seq 9}])
+        (let [resp (mock/handle-cmd
+                    (-> ctx
+                        (edd/reg-query :test-query (fn [_ _] {:id dps-id})))
+                    multi-command-request)]
+          (mock/verify-state :event-store [{:event-id  :cmd-id
+                                            :id        cmd-id-2
+                                            :event-seq 5}
+                                           {:event-id  :dummy-event-1
+                                            :handled   true
+                                            :event-seq 6
+                                            :meta      {}
+                                            :id        cmd-id-2}
+                                           {:event-id  :dummy-event-2
+                                            :handled   true
+                                            :event-seq 7
+                                            :meta      {}
+                                            :id        cmd-id-2}
+                                           {:event-id  :cmd-id
+                                            :id        cmd-id-3
+                                            :event-seq 9}
+                                           {:event-id  :cmd-id
+                                            :id        cmd-id
+                                            :event-seq 21}
+                                           {:event-id  :dummy-event
+                                            :handled   true
+                                            :event-seq 22
+                                            :meta      {}
+                                            :id        cmd-id}
+                                           {:event-id  :cmd-id
+                                            :id        dps-id
+                                            :event-seq 31}
+                                           {:event-id  :dummy-event-3
+                                            :handled   true
+                                            :event-seq 32
+                                            :meta      {}
+                                            :id        dps-id}])
+          (is (= {:effects    [{:cmd-id       :fx-command
+                                :id           #uuid "22222111-1111-1111-1111-111111111111"
+                                :service-name :local-test}]
+                  :events     4
+                  :identities 0
+                  :meta       [{:dummy-cmd {:id cmd-id}}
+                               {:dummy-cmd-2 {:id cmd-id-2}}
+                               {:dummy-cmd-3 {:id dps-id}}]
+                  :sequences  0
+                  :success    true}
+                 resp)))))))
 
 (def request-id #uuid "1111b7b5-9f50-4dc4-86d1-2e4fe1f6d491")
 (def interaction-id #uuid "2222b7b5-9f50-4dc4-86d1-2e4fe1f6d491")
 
 (deftest test-s3-bucket-request
-  (mock/with-mock-dal
-    (with-redefs [sdk-common/create-date (fn [] "20200426T061823Z")
-                  uuid/gen (fn [] request-id)
-                  key (str "test/2021-12-27/" interaction-id "/"
-                           request-id)
-                  sqs/sqs-publish (fn [{:keys [message] :as ctx}]
-                                    (is (= {:Records [{:key (str "response/"
-                                                                 request-id
-                                                                 "/0/local-test.json")}]}
-                                           (util/to-edn message))))]
-      (mock-core
-       :invocations [(s3/records key)]
-       :requests [{:get  (str "https://s3.eu-central-1.amazonaws.com/example-bucket/"
-                              key)
-                   :body (char-array "Of something")}]
-       (core/start
-        (prepare {})
-        edd/handler
-        :filters [fl/from-bucket])
-       (verify-traffic-edn [{:body   {:result         {:effects    [{:cmd-id       :fx-command
-                                                                     :id           #uuid "22222111-1111-1111-1111-111111111111"
-                                                                     :service-name :local-test}]
-                                                       :events     1
-                                                       :identities 0
-                                                       :meta       [{:object-uploaded {:id #uuid "1111b7b5-9f50-4dc4-86d1-2e4fe1f6d491"}}]
-                                                       :sequences  0
-                                                       :success    true}
-                                      :invocation-id  0
-                                      :interaction-id interaction-id
-                                      :request-id     request-id}
-                             :method :post
-                             :url    "http://mock/2018-06-01/runtime/invocation/0/response"}
-                            {:as              :stream
-                             :connect-timeout 300
-                             :headers         {"Authorization"        "AWS4-HMAC-SHA256 Credential=/20200426/eu-central-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=a574e8bfe0d25d8565c3cc47a17f225ec5c1e246c9a7b8646c44b80ba4c50e5c"
-                                               "x-amz-content-sha256" "UNSIGNED-PAYLOAD"
-                                               "x-amz-date"           "20200426T061823Z"
-                                               "x-amz-security-token" nil}
-                             :idle-timeout    5000
-                             :method          :get
-                             :url             "https://s3.eu-central-1.amazonaws.com/example-bucket/test/2021-12-27/2222b7b5-9f50-4dc4-86d1-2e4fe1f6d491/1111b7b5-9f50-4dc4-86d1-2e4fe1f6d491"}
+  (let [ctx (prepare {})]
+    (mock/with-mock-dal
+      ctx
+      (with-redefs [sdk-common/create-date (fn [] "20200426T061823Z")
+                    uuid/gen (fn [] request-id)
+                    key (str "test/2021-12-27/" interaction-id "/"
+                             request-id)
+                    sqs/sqs-publish (fn [{:keys [message] :as ctx}]
+                                      (is (= {:Records [{:key (str "response/"
+                                                                   request-id
+                                                                   "/0/local-test.json")}]}
+                                             (util/to-edn message))))]
+        (mock-core
+         :invocations [(s3/records key)]
+         :requests [{:get  (str "https://s3.eu-central-1.amazonaws.com/example-bucket/"
+                                key)
+                     :body (char-array "Of something")}]
+         (core/start
+          ctx
+          edd/handler
+          :filters [fl/from-bucket])
+         (verify-traffic-edn [{:body   {:result         {:effects    [{:cmd-id       :fx-command
+                                                                       :id           #uuid "22222111-1111-1111-1111-111111111111"
+                                                                       :service-name :local-test}]
+                                                         :events     1
+                                                         :identities 0
+                                                         :meta       [{:object-uploaded {:id #uuid "1111b7b5-9f50-4dc4-86d1-2e4fe1f6d491"}}]
+                                                         :sequences  0
+                                                         :success    true}
+                                        :invocation-id  0
+                                        :interaction-id interaction-id
+                                        :request-id     request-id}
+                               :method :post
+                               :url    "http://mock/2018-06-01/runtime/invocation/0/response"}
+                              {:as              :stream
+                               :connect-timeout 300
+                               :headers         {"Authorization"        "AWS4-HMAC-SHA256 Credential=/20200426/eu-central-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=a574e8bfe0d25d8565c3cc47a17f225ec5c1e246c9a7b8646c44b80ba4c50e5c"
+                                                 "x-amz-content-sha256" "UNSIGNED-PAYLOAD"
+                                                 "x-amz-date"           "20200426T061823Z"
+                                                 "x-amz-security-token" nil}
+                               :idle-timeout    5000
+                               :method          :get
+                               :url             "https://s3.eu-central-1.amazonaws.com/example-bucket/test/2021-12-27/2222b7b5-9f50-4dc4-86d1-2e4fe1f6d491/1111b7b5-9f50-4dc4-86d1-2e4fe1f6d491"}
 
-                            {:method  :get
-                             :timeout 90000000
-                             :url     "http://mock/2018-06-01/runtime/invocation/next"}])))))
+                              {:method  :get
+                               :timeout 90000000
+                               :url     "http://mock/2018-06-01/runtime/invocation/next"}]))))))
 
 (deftest test-api-request-with-fx
   "Test that user is added to events and summary is properly returned"
@@ -255,37 +261,37 @@
                        :request-id     request-id,
                        :interaction-id interaction-id})]
 
-       :requests [{:get  "https://s3.eu-central-1.amazonaws.com/example-bucket/test/key"
-                   :body (char-array "Of something")}]
-       (core/start
-        (prepare {})
-        edd/handler
-        :filters [fl/from-api]
-        :post-filter fl/to-api)
-       (verify-traffic-edn [{:body   {:body            (util/to-json
-                                                        {:result         {:success    true
-                                                                          :effects    [{:id           fx-id
-                                                                                        :cmd-id       :fx-command
-                                                                                        :service-name :local-test}]
-                                                                          :events     1
-                                                                          :meta       [{:dummy-cmd {:id cmd-id}}]
-                                                                          :identities 0
-                                                                          :sequences  0}
-                                                         :invocation-id  0
-                                                         :request-id     request-id
-                                                         :interaction-id interaction-id})
-                                      :headers         {:Access-Control-Allow-Headers  "Id, VersionId, X-Authorization,Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
-                                                        :Access-Control-Allow-Methods  "OPTIONS,POST,PUT,GET"
-                                                        :Access-Control-Allow-Origin   "*"
-                                                        :Access-Control-Expose-Headers "*"
-                                                        :Content-Type                  "application/json"}
-                                      :isBase64Encoded false
-                                      :statusCode      200}
-                             :method :post
-                             :url    "http://mock/2018-06-01/runtime/invocation/0/response"}
-                            {:method  :get
-                             :timeout 90000000
-                             :url     "http://mock/2018-06-01/runtime/invocation/next"}])))))
+         :requests [{:get  "https://s3.eu-central-1.amazonaws.com/example-bucket/test/key"
+                     :body (char-array "Of something")}]
+         (core/start
+          ctx
+          edd/handler
+          :filters [fl/from-api]
+          :post-filter fl/to-api)
+         (verify-traffic-edn [{:body   {:body            (util/to-json
+                                                          {:result         {:success    true
+                                                                            :effects    [{:id           fx-id
+                                                                                          :cmd-id       :fx-command
+                                                                                          :service-name :local-test}]
+                                                                            :events     1
+                                                                            :meta       [{:dummy-cmd {:id cmd-id}}]
+                                                                            :identities 0
+                                                                            :sequences  0}
+                                                           :invocation-id  0
+                                                           :request-id     request-id
+                                                           :interaction-id interaction-id})
+                                        :headers         {:Access-Control-Allow-Headers  "Id, VersionId, X-Authorization,Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
+                                                          :Access-Control-Allow-Methods  "OPTIONS,POST,PUT,GET"
+                                                          :Access-Control-Allow-Origin   "*"
+                                                          :Access-Control-Expose-Headers "*"
+                                                          :Content-Type                  "application/json"}
+                                        :isBase64Encoded false
+                                        :statusCode      200}
+                               :method :post
+                               :url    "http://mock/2018-06-01/runtime/invocation/0/response"}
+                              {:method  :get
+                               :timeout 90000000
+                               :url     "http://mock/2018-06-01/runtime/invocation/next"}]))))))
 
 (deftest test-api-request-single-command
   "Test if sending single command works on api"
@@ -305,37 +311,37 @@
                        :request-id     request-id,
                        :interaction-id interaction-id})]
 
-       :requests [{:get  "https://s3.eu-central-1.amazonaws.com/example-bucket/test/key"
-                   :body (char-array "Of something")}]
-       (core/start
-        (prepare {})
-        edd/handler
-        :filters [fl/from-api]
-        :post-filter fl/to-api)
-       (verify-traffic-edn [{:body   {:body            (util/to-json
-                                                        {:result         {:success    true
-                                                                          :effects    [{:id           fx-id
-                                                                                        :cmd-id       :fx-command
-                                                                                        :service-name :local-test}]
-                                                                          :events     1
-                                                                          :meta       [{:dummy-cmd {:id cmd-id}}]
-                                                                          :identities 0
-                                                                          :sequences  0}
-                                                         :invocation-id  0
-                                                         :request-id     request-id
-                                                         :interaction-id interaction-id})
-                                      :headers         {:Access-Control-Allow-Headers  "Id, VersionId, X-Authorization,Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
-                                                        :Access-Control-Allow-Methods  "OPTIONS,POST,PUT,GET"
-                                                        :Access-Control-Allow-Origin   "*"
-                                                        :Access-Control-Expose-Headers "*"
-                                                        :Content-Type                  "application/json"}
-                                      :isBase64Encoded false
-                                      :statusCode      200}
-                             :method :post
-                             :url    "http://mock/2018-06-01/runtime/invocation/0/response"}
-                            {:method  :get
-                             :timeout 90000000
-                             :url     "http://mock/2018-06-01/runtime/invocation/next"}])))))
+         :requests [{:get  "https://s3.eu-central-1.amazonaws.com/example-bucket/test/key"
+                     :body (char-array "Of something")}]
+         (core/start
+          ctx
+          edd/handler
+          :filters [fl/from-api]
+          :post-filter fl/to-api)
+         (verify-traffic-edn [{:body   {:body            (util/to-json
+                                                          {:result         {:success    true
+                                                                            :effects    [{:id           fx-id
+                                                                                          :cmd-id       :fx-command
+                                                                                          :service-name :local-test}]
+                                                                            :events     1
+                                                                            :meta       [{:dummy-cmd {:id cmd-id}}]
+                                                                            :identities 0
+                                                                            :sequences  0}
+                                                           :invocation-id  0
+                                                           :request-id     request-id
+                                                           :interaction-id interaction-id})
+                                        :headers         {:Access-Control-Allow-Headers  "Id, VersionId, X-Authorization,Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
+                                                          :Access-Control-Allow-Methods  "OPTIONS,POST,PUT,GET"
+                                                          :Access-Control-Allow-Origin   "*"
+                                                          :Access-Control-Expose-Headers "*"
+                                                          :Content-Type                  "application/json"}
+                                        :isBase64Encoded false
+                                        :statusCode      200}
+                               :method :post
+                               :url    "http://mock/2018-06-01/runtime/invocation/0/response"}
+                              {:method  :get
+                               :timeout 90000000
+                               :url     "http://mock/2018-06-01/runtime/invocation/next"}]))))))
 
 (def apply-ctx
   {:def-apply {:event-1 (fn [p v]
@@ -386,10 +392,10 @@
 (deftest test-get-by-id-from-shapshot
 
   (mock/with-mock-dal
-    {:aggregate-store [{:id      "1"
-                        :value   "bla"
-                        :version 3}]}
-
+    (assoc mock/ctx
+           :aggregate-store [{:id      "1"
+                              :value   "bla"
+                              :version 3}])
     (is (= {:id      "1"
             :value   "bla"
             :version 3}
@@ -398,51 +404,55 @@
 (deftest test-get-by-id-missing-snapshot
   "Test combinations of get-by. If aggregate snapshot return nil we apply events"
   "If no events we return nil"
-  (mock/with-mock-dal
-    (with-redefs [dal/get-events (fn [_]
-                                   [])
-                  util/http-get (fn [url request & {:keys [raw]}]
-                                  {:status 404})]
-      (let [response (query/handle-query
-                      (-> (prepare {})
+  (let [ctx (prepare {})]
+    (mock/with-mock-dal
+      ctx
+      (with-redefs [dal/get-events (fn [_]
+                                     [])
+                    util/http-get (fn [url request & {:keys [raw]}]
+                                    {:status 404})]
+        (let [response (query/handle-query
+                        (-> ctx
+                            (elastic-view-store/register))
+                        {:query
+                         {:query-id :get-by-id
+                          :id       "bla"}})]
+          (is (contains? response :aggregate))
+          (is (= nil
+                 (:aggregate response))))))
+    (mock/with-mock-dal
+      ctx
+      (with-redefs [dal/get-events (fn [_]
+                                     [{:event-id  :e7
+                                       :event-seq 1}])
+                    util/http-get (fn [url request & {:keys [raw]}]
+                                    {:status 403})]
+        (is (thrown? ExceptionInfo
+                     (query/handle-query
+                      (-> ctx
                           (elastic-view-store/register))
                       {:query
                        {:query-id :get-by-id
-                        :id       "bla"}})]
-        (is (contains? response :aggregate))
-        (is (= nil
-               (:aggregate response))))))
-  (mock/with-mock-dal
-    (with-redefs [dal/get-events (fn [_]
-                                   [{:event-id  :e7
-                                     :event-seq 1}])
-                  util/http-get (fn [url request & {:keys [raw]}]
-                                  {:status 403})]
-      (is (thrown? ExceptionInfo
-                   (query/handle-query
-                    (-> (prepare {})
-                        (elastic-view-store/register))
-                    {:query
-                     {:query-id :get-by-id
-                      :id       "bla"}})))))
-  (mock/with-mock-dal
-    (with-redefs [dal/get-events (fn [_]
-                                   [{:event-id  :e7
-                                     :event-seq 1
-                                     :id        "bla"}])
-                  util/http-get (fn [url request & {:keys [raw]}]
-                                  {:status 404})]
-      (let [response (query/handle-query
-                      (-> (prepare {})
-                          (elastic-view-store/register))
-                      {:query
-                       {:query-id :get-by-id
-                        :id       "bla"}})]
-        (is (contains? response :aggregate))
-        (is (= {:id      "bla"
-                :name    :e7
-                :version 1}
-               (:aggregate response)))))))
+                        :id       "bla"}})))))
+    (mock/with-mock-dal
+      ctx
+      (with-redefs [dal/get-events (fn [_]
+                                     [{:event-id  :e7
+                                       :event-seq 1
+                                       :id        "bla"}])
+                    util/http-get (fn [url request & {:keys [raw]}]
+                                    {:status 404})]
+        (let [response (query/handle-query
+                        (-> ctx
+                            (elastic-view-store/register))
+                        {:query
+                         {:query-id :get-by-id
+                          :id       "bla"}})]
+          (is (contains? response :aggregate))
+          (is (= {:id      "bla"
+                  :name    :e7
+                  :version 1}
+                 (:aggregate response))))))))
 
 (deftest test-wrap-global-not-list
   (let [result (cmd/wrap-commands {:service-name "a"}

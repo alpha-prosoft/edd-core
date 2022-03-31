@@ -456,7 +456,7 @@
 
 (defn register
   [ctx]
-  (assoc ctx :event-store :postgres))
+  (assoc ctx :edd-event-store :postgres))
 
 (defn get-response-log
   [ctx invocation-id]

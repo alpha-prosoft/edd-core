@@ -7,7 +7,7 @@
             [edd.el.cmd :as cmd]))
 
 (defn dummy-command-handler
-  [ctx cmd]
+  [_ctx cmd]
   (log/info "Dummy" cmd)
   {:event-id :dummy-event
    :id       (:id cmd)
@@ -25,6 +25,7 @@
 
 (deftest test-valid-command
   (mock/with-mock-dal
+    ctx
     (cmd/handle-commands ctx valid-command-request)
     (mock/verify-state :event-store [{:event-id  :dummy-event
                                       :handled   true
@@ -37,6 +38,7 @@
 
 (deftest test-missing-id-command
   (mock/with-mock-dal
+    ctx
     (is (= {:error [{:id ["missing required key"]}]}
            (mock/handle-cmd
             ctx
@@ -44,6 +46,7 @@
 
 (deftest test-missing-failed-custom-validation-command
   (mock/with-mock-dal
+    ctx
     (is (= {:error [{:name ["missing required key"]}]}
            (mock/handle-cmd
             (-> ctx

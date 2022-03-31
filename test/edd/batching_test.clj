@@ -5,7 +5,7 @@
    [edd.common :as common]
    [lambda.uuid :as uuid]
    [edd.test.fixture.dal :as mock]
-   [edd.elastic.view-store :as view-store]
+   [edd.view-store.elastic :as view-store]
    [lambda.test.fixture.client :as client]
    [clojure.test :refer [deftest testing is are use-fixtures run-tests join-fixtures]]
    [lambda.request :as request]))
@@ -44,6 +44,7 @@
 (deftest test-batched-values-should-sum-up-correctly
   (let [ctx (counter-ctx)]
     (mock/with-mock-dal
+      ctx
       (exec/run-cmd! ctx {:commands [{:cmd-id :inc
                                       :id     id1}
                                      {:cmd-id :inc
@@ -56,6 +57,7 @@
 (deftest test-two-commands-non-batched-should-sum-up-correctly
   (let [ctx (counter-ctx)]
     (mock/with-mock-dal
+      ctx
       (exec/run-cmd! ctx {:commands [{:cmd-id :inc
                                       :id     id1}]})
 
@@ -75,6 +77,7 @@
 (deftest test-batched-values-for-2-counters-should-not-interfer
   (let [ctx (counter-ctx)]
     (mock/with-mock-dal
+      ctx
       (exec/run-cmd! ctx {:commands [{:cmd-id :inc
                                       :id     id1}
                                      {:cmd-id :inc

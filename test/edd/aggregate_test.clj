@@ -10,9 +10,7 @@
             [lambda.test.fixture.client :refer [verify-traffic-edn]]
 
             [edd.postgres.event-store :as postgres-event-store]
-            [edd.memory.view-store :as view-store]
-            [edd.memory.event-store :as event-store]
-            [edd.elastic.view-store :as elastic-view-store]
+            [edd.view-store.elastic :as elastic-view-store]
             [edd.test.fixture.dal :as mock]
             [edd.el.query :as query]
             [lambda.s3-test :as s3]

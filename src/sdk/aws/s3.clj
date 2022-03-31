@@ -23,19 +23,15 @@
 
 (defn- parse-response
   [response object]
-  (log/debug "Auth response" response)
+  (log/debug "S3 response" response)
   (cond
     (contains? response :error) (do
                                   (log/error "Failed update" response)
                                   {:error (:error response)})
-    (> (:status response 199) 299) (do
-                                     (log/error "S3 Response failed"
-                                                (:status response)
-                                                (:body response))
-                                     {:error {:status  (:status response)
-                                              :message (slurp (:body response))
-                                              :key     (get-in object [:s3 :object :key])
-                                              :bucket  (get-in object [:s3 :bucket :name])}})
+    (> (:status response 199) 299) {:error {:status  (:status response)
+                                            :message (slurp (:body response))
+                                            :key     (get-in object [:s3 :object :key])
+                                            :bucket  (get-in object [:s3 :bucket :name])}}
     :else response))
 
 (defn put-object

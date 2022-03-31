@@ -103,12 +103,14 @@
 
 (defn EddCoreCommand
   ([] [:map
-       [:id {:description "Id of aggregate that command is mutating"}
+       [:id {:description "Id of aggregate that command is mutating"
+             :optional    true}
         :uuid]
        [:cmd-id {:description "Selects which command will be executed on backend"}
         :keyword]])
   ([cmd-id] [:map
-             [:id :uuid]
+             [:id {:description "Id of aggregate that command is mutating"
+                   :optional    true} :uuid]
              [:cmd-id (EddKeyword cmd-id)]]))
 
 (def EddCoreCommandRequest
