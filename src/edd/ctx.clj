@@ -23,3 +23,13 @@
   [ctx & {:keys [cmd-id
                  options]}]
   (assoc-in ctx [:edd-core :commands cmd-id] options))
+
+(def default-realm :no_realm)
+
+(defn get-realm
+  [ctx]
+  (get-in ctx [:meta :realm] default-realm))
+
+(defn set-realm
+  [ctx realm]
+  (assoc-in ctx [:meta :realm] (keyword realm)))

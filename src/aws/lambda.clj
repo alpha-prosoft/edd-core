@@ -4,7 +4,8 @@
             [lambda.request :as request]
             [lambda.uuid :as uuid]
             [clojure.tools.logging :as log]
-            [clojure.set :as clojure-set]))
+            [runtime.aws :as runtime-aws]
+            [lambda.ctx :as lambda-ctx]))
 
 (defn apply-filters
   [{:keys [filters req] :as ctx}]
@@ -121,16 +122,11 @@
                           :post-filter post-filter)
                    (merge (util/to-edn
                            (util/get-env "CustomConfig" "{}")))
-                   (assoc :service-name (keyword (util/get-env
-                                                  "ServiceName"
-                                                  "local-test"))
-                          :aws (merge {:region                (util/get-env "Region" "local")
-                                       :account-id            (util/get-env "AccountId" "local")
-                                       :aws-access-key-id     (util/get-env "AWS_ACCESS_KEY_ID" "")
-                                       :aws-secret-access-key (util/get-env "AWS_SECRET_ACCESS_KEY" "")
-                                       :aws-session-token     (util/get-env "AWS_SESSION_TOKEN" "")}
-                                      (get init-ctx :aws {}))
-                          :hosted-zone-name (util/get-env
+                   (runtime-aws/init)
+                   (lambda-ctx/set-service-name (keyword (util/get-env
+                                                          "ServiceName"
+                                                          "local-test")))
+                   (assoc :hosted-zone-name (util/get-env
                                              "PublicHostedZoneName"
                                              "example.com")
                           :environment-name-lower (util/get-env
@@ -168,17 +164,9 @@
                           :post-filter post-filter)
                    (merge (util/to-edn
                            (util/get-env "CustomConfig" "{}")))
-                   (assoc :service-name (keyword (util/get-env
-                                                  "ServiceName"
-                                                  "local-test"))
-                          :aws (merge
-                                {:region                (util/get-env "Region" "local")
-                                 :account-id            (util/get-env "AccountId" "local")
-                                 :aws-access-key-id     (util/get-env "AWS_ACCESS_KEY_ID" "")
-                                 :aws-secret-access-key (util/get-env "AWS_SECRET_ACCESS_KEY" "")
-                                 :aws-session-token     (util/get-env "AWS_SESSION_TOKEN" "")}
-                                (get init-ctx :aws {}))
-                          :hosted-zone-name (util/get-env
+                   (runtime-aws/init)
+                   (lambda-ctx/set-service-name (keyword (util/get-env "ServiceName")))
+                   (assoc :hosted-zone-name (util/get-env
                                              "PublicHostedZoneName"
                                              "example.com")
                           :environment-name-lower (util/get-env

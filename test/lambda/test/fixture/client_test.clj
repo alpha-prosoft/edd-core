@@ -64,14 +64,14 @@
   (let [request-body "Action=Bla"]
     (client/mock-http
      [{:post "http://google.com"
-       :req request-body
+       :req  request-body
        :body (util/to-json {:a :b})}]
      (is (= {:body {:a :b}}
             (util/http-post "http://google.com" {:body request-body})))
 
      (client/verify-traffic
       [{:method :post
-        :body request-body
+        :body   request-body
         :url    "http://google.com"}]))))
 
 (deftest test-mock-no-no-body-check
@@ -84,5 +84,5 @@
 
      (client/verify-traffic
       [{:method :post
-        :body request-body
+        :body   request-body
         :url    "http://google.com"}]))))

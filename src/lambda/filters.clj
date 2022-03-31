@@ -145,14 +145,17 @@
                                               :role  role
                                               :roles (:roles user [])}
                                    :meta {:realm (get-realm body user role)
-                                          :user  {:id    (:id user)
-                                                  :email (:email user)
-                                                  :role  role
+                                          :user  {:id              (:id user)
+                                                  :email           (:email user)
+                                                  :role            role
                                                   :department-code (:department-code user "000")
-                                                  :department (:department user "No Department")}})
-      :else (assoc ctx :user {:id    "anonymous"
-                              :email "anonymous"
-                              :role  :anonymous}))))
+                                                  :department      (:department user "No Department")}})
+      :else (assoc ctx :user {:id    (:id user)
+                              :email (:email user)
+                              :role  :anonymous}
+                   :meta {:user {:id    (:id user)
+                                 :email (:email user)
+                                 :role  :anonymous}}))))
 
 (def from-api
   {:init jwt/fetch-jwks-keys

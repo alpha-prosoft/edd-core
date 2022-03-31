@@ -59,7 +59,8 @@
                   [invalid] (filter (fn [[_ v]] (= v :invalid)) resp)]
               (if-not invalid
                 (assoc ctx
-                       :user {:id    (.asString (.getClaim jwt "email"))
+                       :user {:id    (.asString (.getClaim jwt (get-in ctx
+                                                                       [:auth :mapping :id] "email")))
                               :email (.asString (.getClaim jwt "email"))
                               :department (.asString (.getClaim jwt "department"))
                               :department-code (.asString (.getClaim jwt "department_code"))

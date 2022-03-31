@@ -24,6 +24,7 @@
              :meta meta
              :query [{:query-id :get-by-id}]}]
     (mock/with-mock-dal
+      mock/ctx
       (with-redefs [realm-mock fl/get-realm
                     jwt/parse-token (fn [ctx _]
                                       (assoc ctx
@@ -64,6 +65,7 @@
              :meta meta
              :query [{:query-id :get-by-id}]}]
     (mock/with-mock-dal
+      mock/ctx
       (with-redefs [realm-mock fl/get-realm
                     jwt/parse-token (fn [ctx _]
                                       (assoc ctx

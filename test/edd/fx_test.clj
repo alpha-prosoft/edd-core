@@ -2,8 +2,6 @@
   (:require [clojure.test :refer :all]
             [edd.core :as edd]
             [edd.el.cmd :as cmd]
-            [edd.memory.view-store :as view-store]
-            [edd.memory.event-store :as event-store]
             [edd.test.fixture.dal :as mock]
             [lambda.uuid :as uuid]))
 
@@ -84,6 +82,7 @@
 
 (deftest test-command-storage
   (mock/with-mock-dal
+    ctx3
     (mock/handle-cmd ctx3 {:id     cmd-id
                            :cmd-id :cmd-1})
     (mock/verify-state :command-store
@@ -110,6 +109,7 @@
                             :cmd-id "2"}])))]
     (testing "If one handler works"
       (mock/with-mock-dal
+        ctxevt
         (mock/handle-cmd ctxevt {:id     cmd-id
                                  :cmd-id :cmd-1})
         (mock/verify-state :command-store
@@ -119,6 +119,7 @@
                              :meta     {}}])))
     (testing "If multiple handlers work"
       (mock/with-mock-dal
+        ctxevt
         (mock/handle-cmd (edd.core/reg-event-fx
                           ctxevt
                           :e2 (fn [ctx event]
@@ -148,12 +149,14 @@
                      :commands [{:id     cmd-id
                                  :cmd-id :non-existing-cmd}]}])))]
     (mock/with-mock-dal
+      ctx
       (is (= true
              (:success (mock/handle-cmd ctx {:id     cmd-id
                                              :cmd-id :cmd-1}))))
       (mock/execute-fx ctx)
       (mock/execute-fx ctx))
     (mock/with-mock-dal
+      ctx
       (is (= true
              (:success (mock/handle-cmd ctx {:id     cmd-id
                                              :cmd-id :cmd-1}))))

@@ -32,6 +32,7 @@
 
 (deftest test-command-with-no-response-gets-processed
   (mock/with-mock-dal
+    ctx
     (with-redefs
      [event-store/clean-commands (fn [cmd] cmd)]
 
@@ -40,7 +41,7 @@
                                         :request-id request-id)
                                  cmd)
             breadcrumbs (select-keys
-                         (first (:response-log @state/*dal-state*))
+                         (first (mock/peek-state :response-log))
                          [:request-id :breadcrumbs])]
         (is (= {:success    true
                 :effects    []

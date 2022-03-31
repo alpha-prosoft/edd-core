@@ -27,6 +27,7 @@
 
 (deftest test-identity
   (mock/with-mock-dal
+    ctx
     (let [id (uuid/gen)
           resp (mock/handle-cmd ctx
                                 {:cmd-id :create-1
@@ -50,6 +51,7 @@
 (deftest test-handler-returns-vector
   "Command response can contain nil, can return list or vector or map. We should handle it"
   (mock/with-mock-dal
+    ctx
     (let [id (uuid/gen)
           resp (mock/handle-cmd ctx
                                 {:cmd-id :create-2
@@ -71,6 +73,7 @@
 (deftest test-handler-returns-list
   "Command response can contain nil, can return list or vector or map. We should handle it"
   (mock/with-mock-dal
+    ctx
     (let [id (uuid/gen)
           resp (mock/handle-cmd ctx
                                 {:cmd-id :create-3

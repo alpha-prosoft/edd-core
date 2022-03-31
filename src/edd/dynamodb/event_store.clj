@@ -167,4 +167,4 @@
 
 (defn register
   [ctx]
-  (assoc ctx :event-store :dynamodb))
+  (assoc ctx :edd-event-store :dynamodb))

@@ -10,11 +10,11 @@
             [edd.core :as edd]
             [edd.dal :as event-store]
             [edd.memory.event-store :as dal]
-            [edd.elastic.view-store :as elastic-view]
-            [edd.search :as view-store]
+            [edd.view-store.elastic :as elastic-view]
+            [edd.view-store.impl.elastic.main :as elastic-view-impl]
+            [edd.view-store.common :as view-store]
             [clojure.test :refer :all]
             [org.httpkit.client :as http]
-            [edd.elastic.view-store :as elastic]
             [lambda.util :as util]
             [edd.test.fixture.dal :as mock]
             [lambda.uuid :as uuid])
@@ -22,40 +22,42 @@
 
 (deftest when-store-and-load-events-then-ok
   (with-mock-dal
-    (dal/store-event {:id 1 :info "info"})
+    ctx
+    (dal/store-event ctx {:id 1 :info "info"})
     (verify-state [{:id 1 :info "info"}] :event-store)
     (let [events (event-store/get-events (assoc ctx
                                                 :id 1))]
       (is (= [{:id 1 :info "info"}]
              events)))))
 
-(deftest when-update-aggregate-then-ok
-  (with-mock-dal (view-store/update-aggregate (assoc ctx
-                                                     :aggregate {:id 1 :payload "payload"}))
+(deftest when-update-snapshot-then-ok
+  (with-mock-dal
+    ctx
+    (view-store/update-snapshot ctx {:id 1 :payload "payload"})
     (verify-state [{:id      1
                     :payload "payload"}] :aggregate-store)
-    (view-store/update-aggregate (assoc ctx
-                                        :aggregate {:id 1 :payload "payload2"}))
+    (view-store/update-snapshot ctx {:id 1 :payload "payload2"})
     (verify-state [{:id      1
                     :payload "payload2"}] :aggregate-store)))
 
 (deftest when-query-aggregate-with-unknown-condition-then-return-nothing
-  (with-mock-dal (view-store/update-aggregate (assoc ctx
-                                                     :aggregate {:id 1 :payload "payload"}))
-    (view-store/update-aggregate (assoc ctx
-                                        :aggregate {:id 2 :payload "payload"}))
-    (view-store/update-aggregate (assoc ctx
-                                        :aggregate {:id 3 :payload "pa2"}))
+  (with-mock-dal
+    ctx
+    (view-store/update-snapshot ctx {:id 1 :payload "payload"})
+    (view-store/update-snapshot ctx {:id 2 :payload "payload"})
+    (view-store/update-snapshot ctx {:id 3 :payload "pa2"})
     (is (= [{:id 3 :payload "pa2"}]
-           (view-store/simple-search (assoc ctx
-                                            :query {:id 3}))))
+           (common/simple-search (assoc ctx
+                                        :query {:id 3}))))
     (is (= []
-           (view-store/simple-search (assoc ctx
-                                            :query {:id 4}))))))
+           (common/simple-search (assoc ctx
+                                        :query {:id 4}))))))
 
 (deftest when-store-sequence-then-ok
-  (with-mock-dal (dal/store-sequence {:id "id1"})
-    (dal/store-sequence {:id "id2"})
+  (with-mock-dal
+    ctx
+    (dal/store-sequence ctx {:id "id1"})
+    (dal/store-sequence ctx {:id "id2"})
     (verify-state [{:id    "id1"
                     :value 1}
                    {:id    "id2"
@@ -75,10 +77,11 @@
 
 (deftest when-sequnce-null-then-fail
   (with-mock-dal
+    ctx
     (is (thrown? AssertionError
-                 (dal/store-sequence {:id nil})))
+                 (dal/store-sequence ctx {:id nil})))
 
-    (dal/store-sequence {:id "id2"})
+    (dal/store-sequence ctx {:id "id2"})
     (is (= "id2"
            (event-store/get-id-for-sequence-number (assoc ctx
                                                           :sequence 1))))
@@ -90,19 +93,23 @@
                                                                 :id nil))))))
 
 (deftest when-sequence-exists-then-exception
-  (with-mock-dal (dal/store-sequence {:id 1})
+  (with-mock-dal
+    ctx
+    (dal/store-sequence ctx {:id 1})
     (is (thrown? RuntimeException
                  (dal/store-sequence
+                  ctx
                   {:id 1})))
     (verify-state [{:id    1
                     :value 1}] :sequence-store)))
 
 (deftest when-store-identity-then-ok
   (with-mock-dal
-    (dal/store-identity {:identity 1
-                         :id       1})
-    (dal/store-identity {:identity 2
-                         :id       2})
+    ctx
+    (dal/store-identity ctx {:identity 1
+                             :id       1})
+    (dal/store-identity ctx {:identity 2
+                             :id       2})
     (verify-state [{:identity 1
                     :id       1}
                    {:identity 2
@@ -110,22 +117,26 @@
 
 (deftest when-identity-exists-then-exception
   (with-mock-dal
-    (dal/store-identity {:identity 1})
+    ctx
+    (dal/store-identity ctx {:identity 1})
     (is (thrown? RuntimeException
                  (dal/store-identity
+                  ctx
                   {:identity 1})))
     (verify-state [{:identity 1}] :identity-store)))
 
 (deftest when-store-command-then-ok
   (with-mock-dal
-    (dal/store-command {:service "test-service" :payload "payload"})
+    ctx
+    (dal/store-command ctx {:service "test-service" :payload "payload"})
     (verify-state [{:service "test-service"
                     :payload "payload"}] :command-store)))
 
 (deftest when-identity-exists-then-id-for-aggregate-can-be-fetched
   (with-mock-dal
-    (dal/store-identity {:identity 1
-                         :id       2})
+    ctx
+    (dal/store-identity ctx {:identity 1
+                             :id       2})
     (verify-state [{:identity 1
                     :id       2}] :identity-store)
     (is (= 2
@@ -144,12 +155,13 @@
 
 (deftest test-that-events-can-be-fetched-by-aggregate-id
   (with-mock-dal
-    (dal/store-event (first events))
-    (dal/store-event (second events))
-    (dal/store-event {:event-id  :name
-                      :name      "Bla"
-                      :event-seq 3
-                      :id        4})
+    ctx
+    (dal/store-event ctx (first events))
+    (dal/store-event ctx (second events))
+    (dal/store-event ctx {:event-id  :name
+                          :name      "Bla"
+                          :event-seq 3
+                          :id        4})
     (verify-state (conj events {:event-id  :name
                                 :name      "Bla"
                                 :event-seq 3
@@ -168,7 +180,8 @@
 
 (deftest when-no-result-by-id-return-nil
   (with-mock-dal
-    (dal/store-event (first events))
+    ctx
+    (dal/store-event ctx (first events))
     (verify-state [(first events)] :event-store)
     (is (= {:aggregate nil}
            (select-keys (common/get-by-id (assoc ctx :id 5))
@@ -176,22 +189,24 @@
 
 (deftest when-no-id-passed-in-return-nil
   (with-mock-dal
-    (dal/store-event (first events))
+    ctx
+    (dal/store-event ctx (first events))
     (verify-state [(first events)] :event-store)
     (is (= nil
            (common/get-by-id ctx {})))))
 
 (deftest verify-predefined-state
   (with-mock-dal
-    {:event-store [{:event-id :e1}]}
-    (verify-state [{:event-id :e1}] :event-store)
+    (assoc ctx
+           :event-store [{:event-id :e1}])
+    (verify-state :event-store [{:event-id :e1}])
     (verify-state [] :command-store)
-    (dal/store-event (first events))
+    (dal/store-event ctx (first events))
     (verify-state [{:event-id :e1} (first events)] :event-store)
     (is (= nil
            (:aggregate (common/get-by-id (assoc ctx :id 5)))))
     (is (= nil
-           (:aggregate (common/get-by-id {:id 5}))))))
+           (:aggregate (common/get-by-id ctx {:id 5}))))))
 
 (def v1
   {:id  1
@@ -206,16 +221,15 @@
          :at4 "val2-4"}})
 
 (deftest test-simple-search-result
-  (with-mock-dal (view-store/update-aggregate (assoc ctx
-                                                     :aggregate v1))
-    (view-store/update-aggregate (assoc ctx
-                                        :aggregate v2))
+  (with-mock-dal
+    (view-store/update-snapshot ctx v1)
+    (view-store/update-snapshot ctx v2)
     (let [resp
-          (view-store/simple-search
-           (assoc ctx
-                  :query {:query-id :id1
-                          :at1      "val2-1"
-                          :at2      {:at4 "val2-4"}}))]
+          (elastic-view/simple-search
+           ctx
+           {:query-id :id1
+            :at1      "val2-1"
+            :at2      {:at4 "val2-4"}})]
       (is (= v2
              (first resp))))))
 
@@ -229,8 +243,9 @@
 
 (deftest test-event-seq-and-event-order
   (with-mock-dal
-    (dal/store-event e1)
-    (dal/store-event e2)
+    ctx
+    (dal/store-event ctx e1)
+    (dal/store-event ctx e2)
     (is (= 2 (event-store/get-max-event-seq (assoc ctx :id 1))))
     (is (= 0 (event-store/get-max-event-seq (assoc ctx :id 3))))
     (is (= [e1 e2]
@@ -238,21 +253,25 @@
 
 (deftest test-reverse-event-order-1
   (with-mock-dal
-    (dal/store-event e1)
-    (dal/store-event e2)
+    ctx
+    (dal/store-event ctx e1)
+    (dal/store-event ctx e2)
     (is (= [e1 e2]
            (event-store/get-events (assoc ctx
                                           :id 1))))))
 
 (deftest test-reverse-event-order-2
   (with-mock-dal
-    {:command-store [{:cmd 1}]
-     :event-store   [{:event :bla}]}
+    (assoc ctx
+           :command-store [{:cmd 1}]
+           :event-store [{:event :bla}])
     (is (= {:aggregate-store []
             :command-store   [{:cmd 1}]
             :event-store     [{:event :bla}]
             :identity-store  []
-            :sequence-store  []}
+            :sequence-store  []
+            :command-log     []
+            :response-log    []}
            (peek-state)))
 
     (is (= [{:cmd 1}]
@@ -267,7 +286,9 @@
             :command-store   [{:cmd 1}]
             :event-store     []
             :identity-store  []
-            :sequence-store  []}
+            :sequence-store  []
+            :command-log     []
+            :response-log    []}
            (peek-state)))))
 
 (deftest test-simple-query
@@ -276,8 +297,8 @@
                   {:must
                    [{:term {:first.keyword "zeko"}}
                     {:term {:last.two.keyword "d"}}]}}}
-         (util/to-edn (elastic/create-simple-query {:first "zeko"
-                                                    :last  {:two "d"}})))))
+         (util/to-edn (elastic-view-impl/create-simple-query {:first "zeko"
+                                                              :last  {:two "d"}})))))
 (def elk-objects
   [{:attrs   {:cocunut           "123456"
               :cognos            "Some random"
@@ -374,27 +395,29 @@
                                             :query {})))))))
 
 (deftest when-identity-exists-then-exception
-  (with-mock-dal
-    (dal/store-identity {:id       "id1"
-                         :identity 1})
-    (is (thrown? RuntimeException
-                 (dal/store-identity
-                  {:id       "id1"
-                   :identity 1})))
-    (verify-state :identity-store [{:id       "id1"
-                                    :identity 1}])))
+  (let [ctx mock/ctx]
+    (with-mock-dal
+      ctx
+      (dal/store-identity ctx {:id       "id1"
+                               :identity 1})
+      (is (thrown? RuntimeException
+                   (dal/store-identity
+                    ctx
+                    {:id       "id1"
+                     :identity 1})))
+      (verify-state :identity-store [{:id       "id1"
+                                      :identity 1}]))))
 
 (deftest when-identity-exists-then-ok
-  (with-mock-dal
-    (dal/store-identity {:id       "id1"
-                         :identity 1})
-    (dal/store-identity
-     {:id       "id1"
-      :identity 2})
-    (verify-state :identity-store [{:id "id1" :identity 1}
-                                   {:id "id1" :identity 2}])
-
-    (let [ctx (edd/reg-query ctx :get-by-identities common/get-aggregate-id-by-identity)]
+  (let [ctx (edd/reg-query ctx :get-by-identities common/get-aggregate-id-by-identity)]
+    (with-mock-dal
+      ctx
+      (dal/store-identity ctx {:id       "id1"
+                               :identity 1})
+      (dal/store-identity ctx {:id       "id1"
+                               :identity 2})
+      (verify-state :identity-store [{:id "id1" :identity 1}
+                                     {:id "id1" :identity 2}])
       (is (= {1 "id1"
               2 "id1"}
              (mock/query ctx {:query-id :get-by-identities
@@ -404,15 +427,20 @@
                               :ids      1}))))))
 
 (deftest test-identity-generation
-  (with-mock-dal {:identities {"id1" "some-id"}}
-    (is (= "some-id"
-           (common/create-identity "id1")))))
+  (let [id (uuid/gen)]
+    (with-mock-dal
+      (assoc ctx
+             :identities {"id1" id})
+      (is (= id
+             (common/create-identity "id1"))))))
 
 (deftest verify-state-fn-ok-test
-  (with-mock-dal {:aggregate-store [{:a "a"
-                                     :b "b"}
-                                    {:a "c"
-                                     :d "d"}]}
+  (with-mock-dal
+    (assoc ctx
+           :aggregate-store [{:a "a"
+                              :b "b"}
+                             {:a "c"
+                              :d "d"}])
     (verify-state-fn :aggregate-store
                      #(dissoc % :a)
                      [{:b "b"}
@@ -420,6 +448,7 @@
 
 (deftest apply-cmd-test
   (with-mock-dal
+    ctx
     (let [id (uuid/gen)
           ctx (-> mock/ctx
                   (edd/reg-cmd :test-cmd (fn [ctx cmd]
@@ -462,7 +491,7 @@
                                 :interaction-id interaction-id
                                 :meta           {:realm :realm2}
                                 :request-id     request-id
-                                :service        nil}]
+                                :service        mock/service-name}]
                   :events     [{:event-id       :2
                                 :event-seq      4
                                 :id             id
@@ -485,13 +514,13 @@
                                                           :attrs  {:event-id :2
                                                                    :id       id}}]
                                               :meta     {:realm :realm2}
-                                              :service  nil}])
+                                              :service  mock/service-name}])
           (is (= {:effects    [{:breadcrumbs [0
                                               0]
                                 :commands    [{:cmd-id :fx-cmd
                                                :attrs  {:event-id :2
                                                         :id       id}}]
-                                :service     nil}]
+                                :service     mock/service-name}]
                   :events     [{:event-id  :2
                                 :event-seq 5
                                 :id        id}]
@@ -523,36 +552,39 @@
                          (common/get-by-id ctx id))))))
 
 (deftest test-identity-query
-  (let [agg-id (uuid/gen)]
+  (let [agg-id (uuid/gen)
+        ctx (with-redefs [my-command-handler (fn [ctx cmd]
+                                               (is (= {:attrs   {:some :value}
+                                                       :id      agg-id
+                                                       :version 3}
+                                                      (:facility ctx)))
+                                               [])]
+              (register ctx))]
     (with-mock-dal
-      {:identity-store  [{:id       agg-id
-                          :identity "ext-1"}]
-       :aggregate-store [{:version 3
-                          :id      agg-id
-                          :attrs   {:some :value}}]}
-      (with-redefs [my-command-handler (fn [ctx cmd]
-                                         (is (= {:attrs   {:some :value}
-                                                 :id      agg-id
-                                                 :version 3}
-                                                (:facility ctx)))
-                                         [])]
-        (mock/apply-cmd (register ctx)
-                        {:cmd-id   :cmd-1
-                         :id       (uuid/gen)
-                         :external "ext-1"})))))
+      (assoc ctx
+             :identity-store [{:id       agg-id
+                               :identity "ext-1"}]
+             :aggregate-store [{:version 3
+                                :id      agg-id
+                                :attrs   {:some :value}}])
+      (mock/apply-cmd ctx
+                      {:cmd-id   :cmd-1
+                       :id       (uuid/gen)
+                       :external "ext-1"}))))
 
 (deftest storing-same-event-twice-shoulf-faile
   (with-mock-dal
-    (dal/store-event {:id        2
-                      :info      "info"
-                      :event-seq 1})
-    (dal/store-event {:id        2
-                      :info      "info 1"
-                      :event-seq 2})
+    ctx
+    (dal/store-event ctx {:id        2
+                          :info      "info"
+                          :event-seq 1})
+    (dal/store-event ctx {:id        2
+                          :info      "info 1"
+                          :event-seq 2})
     (is (thrown? ExceptionInfo
-                 (dal/store-event {:id        1
-                                   :info      "info"
-                                   :event-seq 1})
-                 (dal/store-event {:id        1
-                                   :info      "info 1"
-                                   :event-seq 1})))))
+                 (dal/store-event ctx {:id        1
+                                       :info      "info"
+                                       :event-seq 1})
+                 (dal/store-event ctx {:id        1
+                                       :info      "info 1"
+                                       :event-seq 1})))))

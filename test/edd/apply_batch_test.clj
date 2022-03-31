@@ -8,7 +8,7 @@
             [lambda.core :as core]
             [edd.test.fixture.dal :as mock]
             [edd.memory.event-store :as event-store]
-            [edd.elastic.view-store :as view-store]
+            [edd.view-store.elastic :as view-store]
             [lambda.test.fixture.client :as client]
             [edd.el.event :as event]
             [sdk.aws.common :as common]))
@@ -89,11 +89,17 @@
                                     :interaction-id int-id}]))]
 
      :requests [{:post "https://sqs.eu-central-1.amazonaws.com/11111111111/test-evets-queue"}
-                {:post   (str "https:///test_local_test/_doc/" agg-id)
+                {:post   (str "https://"
+                              view-store/default-endpoint
+                              "/test_local_test/_doc/" agg-id)
                  :status 200}
-                {:post   (str "https:///test_local_test/_doc/" agg-id)
+                {:post   (str "https://"
+                              view-store/default-endpoint
+                              "/test_local_test/_doc/" agg-id)
                  :status 200}
-                {:post   (str "https:///test_local_test/_doc/" agg-id)
+                {:post   (str "https://"
+                              view-store/default-endpoint
+                              "/test_local_test/_doc/" agg-id)
                  :status 200}]
      (core/start
       ctx
@@ -113,14 +119,16 @@
                            :method :post
                            :url    "http://mock/2018-06-01/runtime/invocation/0/response"}
                           {:body            {:id agg-id}
-                           :headers         {"Authorization"        "AWS4-HMAC-SHA256 Credential=/20210322/eu-central-1/es/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=8b2d9b4b2390562f95edc1b2dc52223e9cac7eb1b50b460156d53183ef2346e3"
+                           :headers         {"Authorization"        "AWS4-HMAC-SHA256 Credential=/20210322/eu-central-1/es/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=ab1a70f0e461912913f915bee46ebf1df7c742edab626007e33d747195613d39"
                                              "Content-Type"         "application/json"
                                              "X-Amz-Date"           "20210322T232540Z"
                                              "X-Amz-Security-Token" ""}
                            :method          :post
                            :idle-timeout    20000
                            :connect-timeout 300
-                           :url             "https:///test_local_test/_doc/05120289-90f3-423c-ad9f-c46f9927a53e"}
+                           :url             (str "https://"
+                                                 view-store/default-endpoint
+                                                 "/test_local_test/_doc/05120289-90f3-423c-ad9f-c46f9927a53e")}
                           {:method  :get
                            :timeout 90000000
                            :url     "http://mock/2018-06-01/runtime/invocation/next"}]))))

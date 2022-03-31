@@ -1,17 +1,5 @@
 (ns lambda.test.fixture.state)
 
-(def default-db
-  {:global          true
-   :event-store     []
-   :identity-store  []
-   :sequence-store  []
-   :command-store   []
-   :aggregate-store []
-   :response-log    []
-   :command-log     []})
-
-(def ^:dynamic *dal-state* (atom default-db))
-
 (def ^:dynamic *mock*)
 
 (def ^:dynamic *queues* {:command-queue (atom [])

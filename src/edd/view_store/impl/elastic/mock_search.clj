@@ -1,9 +1,11 @@
-(ns edd.memory.search
+(ns edd.view-store.impl.elastic.mock-search
   (:require
    [clojure.string :as str]
-   [edd.search :refer [parse default-size]]
-   [lambda.test.fixture.state :as state]
+   [edd.memory.event-store :as event-store]
+   [edd.view-store.impl.elastic.common :as common]
    [clojure.tools.logging :as log]))
+
+(def default-elastic-store {:aggregate-store []})
 
 (defn to-keywords
   [a]
@@ -26,7 +28,7 @@
   (fn [%]
     (let [result (every?
                   (fn [p]
-                    (let [rest-fn (parse ctx p)]
+                    (let [rest-fn (common/parse ctx p)]
                       (rest-fn %)))
                   r)]
       result)))
@@ -36,7 +38,7 @@
   (fn [%]
     (let [result (some
                   (fn [p]
-                    (let [rest-fn (parse mock p)]
+                    (let [rest-fn (common/parse mock p)]
                       (rest-fn %)))
                   r)]
       (if result
@@ -57,7 +59,9 @@
 (defn not-fn
   [mock & [rest]]
   (fn [%]
-    (not (apply (parse mock rest) [%]))))
+    (not
+     (apply
+      (common/parse mock rest) [%]))))
 
 (defn in-fn
   [_ key & [values]]
@@ -70,7 +74,7 @@
         true
         false))))
 (defn exists-fn
-  [_ key & [values]]
+  [_ key & [_values]]
   (fn [p]
     (let [keys (to-keywords key)]
       (not= (get-in p keys :nil) :nil))))
@@ -85,7 +89,7 @@
 
 (defn search-fn
   [q p]
-  (let [[fields-key fields value-key value] (:search q)]
+  (let [[_fields-key fields _value-key value] (:search q)]
     (if (some
          #(let [v (get-in p (to-keywords %) "")]
             (.contains v value))
@@ -113,14 +117,6 @@
    (map
     field-to-kw-list
     (get q :select []))))
-
-(defn get-items
-  [q item]
-  (reduce
-   (fn [p v]
-     (str p (get-in item (to-keywords v))))
-   ""
-   (:sort q)))
 
 (defn compare-as-number
   [a b]
@@ -166,16 +162,16 @@
    items))
 
 (defn advanced-search-impl
-  [{:keys [query]}]
+  [_ctx query]
   {:pre [query]}
-  (let [state (->> @state/*dal-state*
+  (let [state (->> @event-store/*dal-state*
                    (:aggregate-store))
         apply-filter (if (:filter query)
-                       (parse mock (:filter query))
-                       (fn [%] true))
+                       (common/parse mock (:filter query))
+                       (fn [_%] true))
         apply-search (if (:search query)
                        (partial search-fn query)
-                       (fn [%] true))
+                       (fn [_%] true))
         apply-select (if (:select query)
                        (partial select-fn query)
                        (fn [%] %))
@@ -192,7 +188,7 @@
               (get query :size (count hits)))]
     {:total (count hits)
      :from  (get query :from 0)
-     :size  (get query :size default-size)
+     :size  (get query :size common/default-size)
      :hits  (subvec hits
                     (get query :from 0)
                     (if (> to (count hits))

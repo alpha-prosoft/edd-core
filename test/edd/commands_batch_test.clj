@@ -8,9 +8,6 @@
             [edd.core :as edd]
             [lambda.core :as core]
             [edd.test.fixture.dal :as mock]
-            [edd.memory.event-store :as event-store]
-            [edd.memory.view-store :as view-store]
-            [lambda.test.fixture.client :as client]
             [sdk.aws.common :as common]
             [sdk.aws.sqs :as sqs]))
 

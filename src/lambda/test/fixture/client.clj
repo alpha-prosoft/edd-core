@@ -77,33 +77,56 @@
   "Each request contained :method :url pair and response :body.
   Optionally there might be :req which is body of request that
   has to me matched"
-  [{:keys [url method] :as req} & rest]
+  [ctx {:keys [url method] :as req} & rest]
   (record-traffic req)
   (let [all (:responses @*world*)
         idx (find-first
              all
              (partial is-match req))
-        resp (get all idx)]
-    (if idx
-      (do
-        (swap! *world*
-               update-in [:responses]
-               #(remove-at % idx))
+        resp (get all idx)
+        config (:http-mock ctx)]
+    (log/debug "CONFIG" config)
+    (cond
+      idx (do
+            (swap! *world*
+                   update-in [:responses]
+                   #(remove-at % idx))
 
-        (ref
-         (dissoc resp method :req :keep)))
+            (ref
+             (dissoc resp method :req :keep)))
+      (:ignore-missing config) (do
+                                 (log/error {:error {:message "Mock not Found"
+                                                     :url     url
+                                                     :method  method
+                                                     :req     req}})
+                                 (ref
+                                  {:status 200
+                                   :body   (util/to-json {:result nil})}))
+      :else (apply (:original-handler ctx)
+                   (into [req] rest)))))
 
-      (do
-        (log/error {:error {:message "Mock not Found"
-                            :url     url
-                            :method  method
-                            :req     req}})
-        (ref
-         {:status 200
-          :body   (util/to-json {:result nil})})))))
+(defmacro mock-http-ctx
+  [ctx responses & body]
+  `(let [responses# ~responses
+         ctx# (update ~ctx
+                      :http-mock
+                      #(merge {:ignore-missing true} %))]
+     (binding [*world* (atom {:responses responses#})]
+       (let [original-request# http/request]
+         (with-redefs [http/request (partial
+                                     handle-request
+                                     (assoc ctx#
+                                            :original-handler original-request#))]
+           (do ~@body))))))
 
 (defmacro mock-http
   [responses & body]
-  `(binding [*world* (atom {:responses ~responses})]
-     (with-redefs [http/request handle-request]
-       (do ~@body))))
+  `(let [responses# ~responses
+         ctx# {:http-mock {:ignore-missing true}}]
+     (binding [*world* (atom {:responses responses#})]
+       (let [original-request# http/request]
+         (with-redefs [http/request (partial
+                                     handle-request
+                                     (assoc ctx#
+                                            :original-handler original-request#))]
+           (do ~@body))))))

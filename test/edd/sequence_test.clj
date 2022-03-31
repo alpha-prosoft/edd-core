@@ -4,8 +4,6 @@
    [aws.lambda  :refer [handle-request]]
    [edd.test.fixture.dal :as mock]
    [edd.core :as edd]
-   [edd.memory.view-store :as view-store]
-   [edd.memory.event-store :as event-store]
    [lambda.uuid :as uuid]))
 
 (def ctx
@@ -18,6 +16,7 @@
 
 (deftest test-sequence-generation
   (mock/with-mock-dal
+    ctx
     (let [id (uuid/gen)
           resp (mock/handle-cmd
                 ctx

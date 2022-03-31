@@ -24,14 +24,9 @@
 
 (def cmd-id (uuid/parse "111111-1111-1111-1111-111111111111"))
 
-(require '[edd.test.fixture.execution :as exec])
-(require '[lambda.test.fixture.state
-           :as state])
-
-@state/*dal-state*
-
 (deftest test-version-with-no-aggregate
   (mock/with-mock-dal
+    ctx
     (mock/apply-cmd ctx {:cmd-id :cmd-1
                          :id     cmd-id})
 
@@ -46,11 +41,12 @@
 
 (deftest test-version-when-aggregate-exists
   (mock/with-mock-dal
-    {:event-store [{:event-id  :event-1
-                    :id        cmd-id
-                    :event-seq 1
-                    :meta      {}
-                    :name      "Test name"}]}
+    (assoc ctx
+           :event-store [{:event-id  :event-1
+                          :id        cmd-id
+                          :event-seq 1
+                          :meta      {}
+                          :name      "Test name"}])
 
     (with-redefs [dal/get-max-event-seq (fn [_]
                                           (throw (ex-info "Fetching"
@@ -74,6 +70,7 @@
 
 (deftest test-version-when-aggregate-missing
   (mock/with-mock-dal
+    ctx
     (with-redefs [dal/get-max-event-seq (fn [_]
                                           (throw (ex-info "Fetching"
                                                           {:should :not})))]

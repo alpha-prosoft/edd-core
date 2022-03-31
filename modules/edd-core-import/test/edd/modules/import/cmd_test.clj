@@ -25,7 +25,7 @@
                                          files))
                                   []))]
       (mock/with-mock-dal
-
+        ctx
         (mock/apply-cmd ctx {:cmd-id :object-uploaded
                              :bucket "some-bucket"
                              :date   date
@@ -68,7 +68,7 @@
                                                                  :status :uploaded}
                                                         :id     id}]
                                             :meta     {}
-                                            :service  nil}])
+                                            :service  mock/service-name}])
         (mock/execute-fx-apply ctx)
         (mock/verify-state :aggregate-store [{:id      id
                                               :import  {:bucket "some-bucket"

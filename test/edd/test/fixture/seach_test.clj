@@ -1,9 +1,11 @@
 (ns edd.test.fixture.seach-test
   (:require [clojure.test :refer :all]
-            [edd.search :refer [advanced-search parse]]
+            [edd.view-store.impl.elastic.common :refer [parse]]
+            [edd.view-store.impl.elastic.mock :refer [advanced-search]]
             [lambda.test.fixture.state :as state]
             [edd.test.fixture.dal :refer [ctx]]
-            [edd.memory.search :as search]))
+            [edd.view-store.impl.elastic.mock-search :as search]
+            [edd.test.fixture.dal :as mock]))
 
 (deftest and-test-1
   (with-redefs [parse (fn [ctx p]
@@ -355,17 +357,17 @@
   (let [data [{:a {:b :e}
                :c :d}
               {:c :d}]]
-    (binding [state/*dal-state* (atom {:aggregate-store data})]
+    (mock/with-mock-dal
+      (assoc ctx
+             :aggregate-store data)
       (is (= {:from  0
               :hits  [{:a {:b :e}
                        :c :d}]
               :size  50
               :total 1}
-             (advanced-search (assoc ctx
-                                     :query {:filter [:exists :a.b]}))))
+             (advanced-search ctx {:filter [:exists :a.b]})))
       (is (= {:from  0
               :hits  [{:c :d}]
               :size  50
               :total 1}
-             (advanced-search (assoc ctx
-                                     :query {:filter [:not [:exists :a]]})))))))
+             (advanced-search ctx {:filter [:not [:exists :a]]}))))))

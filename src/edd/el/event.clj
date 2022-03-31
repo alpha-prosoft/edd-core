@@ -6,6 +6,7 @@
    [edd.request-cache :as request-cache]
    [lambda.request :as request]
    [edd.search :as search]
+   [edd.view-store.common :as view-store]
    [lambda.util :as util]))
 
 (defn apply-event
@@ -65,7 +66,7 @@
 (defn fetch-snapshot
   [{:keys [id] :as ctx}]
 
-  (if-let [snapshot (search/get-snapshot ctx id)]
+  (if-let [snapshot (view-store/get-snapshot ctx id)]
     (do
       (when snapshot
         (log/info "Found snapshot: " (:version snapshot)))
@@ -91,7 +92,7 @@
 (defn update-aggregate
   [ctx]
   (if (:aggregate ctx)
-    (search/update-aggregate ctx)
+    (view-store/update-snapshot ctx (:aggregate ctx))
     ctx))
 
 (defn handle-event

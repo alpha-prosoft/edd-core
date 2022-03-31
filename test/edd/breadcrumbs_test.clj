@@ -142,6 +142,7 @@
 
 (deftest test-breadcrumbs-for-emtpy-command
   (mock/with-mock-dal
+    ctx
     (with-redefs
      [event-store/clean-commands (fn [cmd] (dissoc cmd
                                                    :request-id
@@ -150,12 +151,13 @@
 
       (exec/run-cmd! ctx {:commands [{:cmd-id :inc
                                       :id     id1}]})
-      (let [cmds (set (:command-store @state/*dal-state*))]
+      (let [cmds (mock/pop-state :command-store)]
         (is (= command-store-with-bc
                (sort-crumbs cmds)))))))
 
 (deftest test-breadcrumbs-for-command-with-breadcrumb
   (mock/with-mock-dal
+    ctx
     (with-redefs
      [event-store/clean-commands (fn [cmd]
                                    (dissoc cmd
@@ -166,6 +168,6 @@
       (exec/run-cmd! ctx {:commands    [{:cmd-id :inc
                                          :id     id1}]
                           :breadcrumbs [0]})
-      (let [cmds (:command-store @state/*dal-state*)]
+      (let [cmds (mock/pop-state :command-store)]
         (is (= command-store-with-bc
                (sort-crumbs cmds)))))))

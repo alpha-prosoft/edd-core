@@ -2,39 +2,52 @@
   (:require [clojure.test :refer :all]
             [clojure.tools.logging :as log]
             [lambda.util :as util]
-            [edd.memory.view-store :as memory-view-store]
-            [edd.elastic.view-store :as elastic-view-store]
+            [edd.view-store.elastic :as elastic-view-store]
+            [edd.memory.event-store :as memory-event-store]
             [edd.search :as search]
             [lambda.test.fixture.state :as state]
             [edd.search :as search]
             [lambda.elastic :as el]
             [lambda.uuid :as uuid]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [edd.test.fixture.dal :as mock]))
 
-(def ctx
-  {:elastic-search {:url (util/get-env "IndexDomainEndpoint")}
-   :meta           {:realm :test}
-   :aws            {:region                (util/get-env "AWS_DEFAULT_REGION")
-                    :aws-access-key-id     (util/get-env "AWS_ACCESS_KEY_ID")
-                    :aws-secret-access-key (util/get-env "AWS_SECRET_ACCESS_KEY")
-                    :aws-session-token     (util/get-env "AWS_SESSION_TOKEN")}})
+(defn ctx
+  []
+  (let [ctx {:meta {:realm :test}}]
+    (if (util/get-env "AWS_ACCESS_KEY_ID")
+      (assoc ctx
+             :aws {:region                (util/get-env "AWS_DEFAULT_REGION")
+                   :aws-access-key-id     (util/get-env "AWS_ACCESS_KEY_ID")
+                   :aws-secret-access-key (util/get-env "AWS_SECRET_ACCESS_KEY")
+                   :aws-session-token     (util/get-env "AWS_SESSION_TOKEN")})
+      ctx)))
+
 (defn load-data
   [ctx]
-  (doseq [i (:aggregate-store @state/*dal-state*)]
-    (log/info (el/query
-               (assoc ctx
-                      :method "POST"
-                      :path (str "/"
-                                 (elastic-view-store/realm ctx)
-                                 "_" (:service-name ctx) "/_doc")
-                      :body (util/to-json
-                             i))))))
+  (let [path (str "/"
+                  (elastic-view-store/realm ctx)
+                  "_" (:service-name ctx) "/_doc")]
+    (doseq [i (mock/peek-state :aggregate-store)
+            {:keys [error]} (el/query
+                             (merge
+                              ctx
+                              {:method "POST"
+                               :path   path
+                               :body   (util/to-json
+                                        i)}))]
+      (when error
+        (throw (ex-info "Error loading data" error))))
+    (log/info (str "Data loaded: " path))))
 
 (defn test-query
   [data q]
-  (binding [state/*dal-state* (atom {:aggregate-store data})]
+  (binding [memory-event-store/*dal-state* (atom {:aggregate-store data})]
     (let [service-name (str/replace (str (uuid/gen)) "-" "_")
-          local-ctx (assoc ctx :service-name service-name)
+          local-ctx (assoc (ctx) :service-name service-name)
+          el-ctx (-> local-ctx
+                     (elastic-view-store/register)
+                     (assoc :query q))
           body {:settings
                 {:index
                  {:number_of_shards   1
@@ -44,36 +57,61 @@
                  [{:integers
                    {:match_mapping_type "long",
                     :mapping
-                    {:type "integer",
-                     :fields
-                     {:number {:type "long"},
-                      :keyword
-                      {:type         "keyword",
-                       :ignore_above 256}}}}}]}}]
+                    {:type   "integer",
+                     :fields {:number  {:type "long"},
+                              :keyword {:type         "keyword",
+                                        :ignore_above 256}}}}}]}}]
+
+      (log/info "Deleting existing test indices" service-name)
+      (let [{:keys [error]} (el/query
+                             (merge
+                              el-ctx
+                              {:method "DELETE"
+                               :path   "/test*"}))]
+        (when error
+          (throw (ex-info "Deleting indices" error))))
 
       (log/info "Index name" service-name)
-      (el/query
-       (assoc local-ctx
-              :method "PUT"
-              :path (str "/"
-                         (elastic-view-store/realm ctx)
-                         "_"
-                         service-name)
-              :body (util/to-json body)))
-      (load-data local-ctx)
+      (let [{:keys [error] :as body} (el/query
+                                      (merge
+                                       el-ctx
+                                       {:method "PUT"
+                                        :path   (str "/"
+                                                     (elastic-view-store/realm el-ctx)
+                                                     "_"
+                                                     service-name)
+                                        :body   (util/to-json body)}))]
+        (when error
+          (throw (ex-info "Error creating index"
+                          error)))
+        (log/info "Index creation response: " body))
+      (load-data el-ctx)
       (Thread/sleep 2000)
-      (let [el-result (search/advanced-search (-> local-ctx
-                                                  (elastic-view-store/register)
-                                                  (assoc :query q)))
+      (let [{:keys [error] :as body} (el/query
+                                      (merge
+                                       el-ctx
+                                       {:method "GET"
+                                        :path   (str "/"
+                                                     (elastic-view-store/realm el-ctx)
+                                                     "_"
+                                                     service-name
+                                                     "/_mapping")}))]
+        (when error
+          (throw (ex-info "Error getting index mapping"
+                          error)))
+        (log/info "Mapping: " body))
+      (let [el-result (search/advanced-search el-ctx)
             mock-result (search/advanced-search (-> local-ctx
-                                                    (memory-view-store/register)
+                                                    (elastic-view-store/register
+                                                     :implementation :mock)
                                                     (assoc :query q)))]
         (log/info el-result)
         (log/info mock-result)
         (el/query
-         (assoc local-ctx
-                :method "DELETE"
-                :path (str "/" service-name)))
+         (merge
+          el-ctx
+          {:method "DELETE"
+           :path   (str "/" service-name)}))
         [el-result mock-result]))))
 
 (deftest test-elastic-mock-parity-1
@@ -485,7 +523,7 @@
     (is (= expected
            mock-result))))
 
-(deftest test-elastic-mock-parity-sort-desc-2
+(deftest test-elastic-mock-parity-sort-desc-2-2
   (let [data [{:k1 1}
               {:k1 20}
               {:k1 3}
@@ -575,7 +613,7 @@
                   :size  50
                   :total 4}
 
-        [el-result mock-result] (test-query data query)]
+        [el-result _mock-result] (test-query data query)]
     (is (= expected
            el-result))))
 

@@ -30,8 +30,7 @@
   (try
     (el-cmd/validate-commands ctx [{}])
     (catch ExceptionInfo ex
-      (is (= {:error [{:cmd-id ["missing required key"]
-                       :id     ["missing required key"]}]}
+      (is (= {:error [{:cmd-id ["missing required key"]}]}
              (ex-data ex))))))
 
 (deftest test-invalid-cmd-id-type
@@ -65,7 +64,7 @@
       (el-cmd/validate-commands ctx [cmd-missing cmd-invalid cmd-valid])
       (catch ExceptionInfo ex
         (is (= {:error ["Missing handler: :test-unknown"
-                        {:id ["missing required key"]}
+                        {:name ["should be a string"]}
                         :valid]}
                (ex-data ex)))))))
 
@@ -112,12 +111,14 @@
   (let [request-id (uuid/gen)
         interaction-id (uuid/gen)
         id (uuid/gen)
+        ctx (register)
         cmd {:request-id     request-id,
              :interaction-id interaction-id,
              :user           {:selected-role :group-1}
              :commands       [{:cmd-id :ping
                                :id     id}]}]
     (mock/with-mock-dal
+      ctx
       (with-redefs [sqs/sqs-publish (fn [{:keys [message]}]
                                       (is (= {:Records [{:key (str "response/"
                                                                    request-id
@@ -126,7 +127,7 @@
         (mock-core
          :invocations [(api-request cmd)]
          (core/start
-          (register)
+          ctx
           edd/handler
           :filters [fl/from-api]
           :post-filter fl/to-api)
