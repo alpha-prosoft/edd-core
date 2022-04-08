@@ -13,20 +13,22 @@
 (defn query
   [{:keys [method path body view-store aws]} & {:keys [ignored-status]}]
   (let [elastic-search (get-in view-store [:config])
+        elastic-auth (util/get-env "ELASTIC_AUTH")
         req (cond-> {:method     method
                      :uri        path
                      :query      ""
                      :headers    {"Host"         (:url elastic-search)
                                   "Content-Type" "application/json"
-                                  "X-Amz-Date" (common/create-date)}
+                                  "X-Amz-Date"   (common/create-date)}
                      :service    "es"
                      :region     (:region aws)
                      :access-key (:aws-access-key-id aws)
                      :secret-key (:aws-secret-access-key aws)}
               body (assoc :payload body))
-        auth (if aws
-               (common/authorize req)
-               "Basic YWRtaW46YWRtaW4=")
+        auth (cond
+               elastic-auth elastic-auth
+               aws (common/authorize req)
+               :else "Basic YWRtaW46YWRtaW4=")
         request (cond-> {:headers   (-> (:headers req)
                                         (dissoc "Host")
                                         (assoc

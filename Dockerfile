@@ -19,6 +19,7 @@ COPY --chown=build:build deps.edn deps.edn
 COPY --chown=build:build tests.edn tests.edn
 COPY --chown=build:build format.sh format.sh
 COPY --chown=build:build ansible ansible
+COPY --chown=build:build repl repl
 
 RUN ./format.sh check
 
@@ -37,6 +38,9 @@ USER build
 
 ARG BUILD_ID
 
+
+RUN ip address
+
 RUN set -e &&\
     echo "Org: ${ARTIFACT_ORG}" &&\
     clj -M:test:unit &&\
@@ -51,21 +55,14 @@ RUN set -e &&\
     export AWS_ACCESS_KEY_ID=$(echo $cred | jq -r '.Credentials.AccessKeyId') &&\
     export AWS_SECRET_ACCESS_KEY=$(echo $cred | jq -r '.Credentials.SecretAccessKey') &&\
     export AWS_SESSION_TOKEN=$(echo $cred | jq -r '.Credentials.SessionToken') &&\
+    export ELASTIC_AUTH="Basic YWRtaW46YWRtaW4=" &&\
     export AccountId=$TARGET_ACCOUNT_ID &&\
     export Region=$AWS_DEFAULT_REGION &&\
     export EnvironmentNameLower=pipeline &&\
-    export DatabasePassword="$(aws secretsmanager get-secret-value  \
-                                       --secret-id /pipeline/alpha-postgres-svc/password \
-                                       --query SecretString \
-                                       --output text)" &&\
-    export DatabaseEndpoint="$(aws rds describe-db-instances \
-                                       --query 'DBInstances[0].Endpoint.Address' \
-                                       --output text)" &&\
-    domain_name=$(aws es list-domain-names  | jq -r '.DomainNames[0].DomainName') &&\
-    echo "Found domain ${domain_name}" &&\
-    domain_url=$(aws es describe-elasticsearch-domain --domain-name ${domain_name} | jq -r '.DomainStatus.Endpoints.vpc') &&\
-    export IndexDomainEndpoint=$domain_url &&\
-    export DatabaseEndpoint="$(aws rds describe-db-instances --query 'DBInstances[].Endpoint.Address' --filter "Name=engine,Values=postgres" --output text)" &&\
+    export DatabasePassword="no-secret" &&\
+    export HOST_IP="127.0.0.1" &&\
+    export DatabaseEndpoint="$HOST_IP" &&\
+    export IndexDomainEndpoint="$HOST_IP:9200" &&\
     flyway -password="${DatabasePassword}" \
                -schemas=glms,test,prod \
                -url=jdbc:postgresql://${DatabaseEndpoint}:5432/postgres?user=postgres \
