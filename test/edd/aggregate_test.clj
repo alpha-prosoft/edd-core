@@ -11,6 +11,7 @@
 
             [edd.postgres.event-store :as postgres-event-store]
             [edd.view-store.elastic :as elastic-view-store]
+            [edd.view-store.impl.elastic.mock :as mock-elastic-impl]
             [edd.test.fixture.dal :as mock]
             [edd.el.query :as query]
             [lambda.s3-test :as s3]
@@ -74,7 +75,9 @@
                (.getMessage e)))))))
 
 (deftest test-apply-cmd-storing-error
-  (with-redefs [dal/get-events (fn [_]
+  (with-redefs [mock-elastic-impl/update-aggregate-impl (fn [_ _]
+                                                          (throw (ex-info "Error saving" {})))
+                dal/get-events (fn [_]
                                  [{:event-id :event-1
                                    :id       cmd-id
                                    :k1       "a"}
@@ -84,7 +87,7 @@
 
     (is (thrown? Exception
                  (event/handle-event (-> apply-ctx
-                                         elastic-view-store/register
+                                         (elastic-view-store/register :implementation :mock)
                                          (assoc :apply {:aggregate-id cmd-id
                                                         :apply        :cmd-1})))))))
 
