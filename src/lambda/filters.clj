@@ -106,14 +106,12 @@
         (get user :roles [])))
 
 (defn get-realm
-  [ctx {:keys [roles]} _]
+  [_ {:keys [roles]} _]
   (let [realm-prefix "realm-"
         realm (->> roles
                    (map name)
                    (filter #(str/starts-with? % realm-prefix))
-                   (first))
-        realm (or realm
-                  (get-in ctx [:auth :default-realm]))]
+                   (first))]
     (when-not realm
       (throw (ex-info (str "Realm: " realm) {:error "Missing realm in request token"})))
     (keyword (subs realm (count realm-prefix)))))
@@ -125,19 +123,13 @@
     #(= % :non-interactive)
     (:roles user))))
 
-(defn extract-m2m-user
-  [ctx authorizer]
+(defn extract-m2m-user [authorizer]
   (let [groups (-> authorizer
                    :claims
-                   :cognito:groups)
-        groups (if groups
-                 (-> groups
-                     (str/split #","))
-                 [])
+                   :cognito:groups
+                   (str/split #","))
         groups (map keyword groups)]
-    {:id    (-> authorizer
-                :claims
-                (get (keyword (get-in ctx [:auth :mapping :id] "email"))))
+    {:id    (-> authorizer :claims :email)
      :roles groups
      :role  (first groups)
      :email (-> authorizer :claims :email)}))
@@ -149,7 +141,7 @@
 
 (defn parse-authorizer-user
   [ctx]
-  (let [user (extract-m2m-user ctx (-> ctx :req :requestContext :authorizer))
+  (let [user (extract-m2m-user (-> ctx :req :requestContext :authorizer))
         role (or (-> ctx :body :user :selected-role)
                  (non-interactive user)
                  (first (remove #(or (= % :anonymous)
@@ -157,7 +149,7 @@
                                 (:roles user))))
         user (assoc user :role role)]
     (assoc ctx :user user
-           :meta {:realm (get-realm ctx user nil)
+           :meta {:realm (get-realm nil user nil)
                   :user  (assoc user
                                 :department-code "000"
                                 :department "No Department")})))
@@ -191,18 +183,15 @@
                                               :email (:email user)
                                               :role  role
                                               :roles (:roles user [])}
-                                   :meta {:realm (get-realm ctx user role)
+                                   :meta {:realm (get-realm body user role)
                                           :user  {:id              (:id user)
                                                   :email           (:email user)
                                                   :role            role
                                                   :department-code (:department-code user "000")
                                                   :department      (:department user "No Department")}})
-      :else (assoc ctx :user {:id    (:id user)
-                              :email (:email user)
-                              :role  :anonymous}
-                   :meta {:user {:id    (:id user)
-                                 :email (:email user)
-                                 :role  :anonymous}}))))
+      :else (assoc ctx :user {:id    "anonymous"
+                              :email "anonymous"
+                              :role  :anonymous}))))
 
 (def from-api
   {:init jwt/fetch-jwks-keys
