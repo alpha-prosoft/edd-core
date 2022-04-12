@@ -124,16 +124,23 @@
     (:roles user))))
 
 (defn extract-m2m-user [authorizer]
-  (let [groups (-> authorizer :claims (str/split #" "))]
-    {:id (-> authorizer :user)
+  (let [groups (-> authorizer
+                   :claims
+                   :cognito:groups
+                   (str/split #","))
+        groups (map keyword groups)]
+    {:id    (-> authorizer :claims :email)
      :roles groups
-     :role (first groups)
-     :email (-> authorizer :email)}))
+     :role  (first groups)
+     :email (-> authorizer :claims :email)}))
 
 (defmulti check-user-role
-  (fn [ctx] (get-in (:req ctx) [:requestContext :authorizer :principalId])))
+  (fn [ctx]
+    (get-in (:req ctx) [:requestContext :authorizer :claims :token_use]
+            (get-in (:req ctx) [:requestContext :authorizer :token_use]))))
 
-(defmethod check-user-role "LMS" [ctx]
+(defn parse-authorizer-user
+  [ctx]
   (let [user (extract-m2m-user (-> ctx :req :requestContext :authorizer))
         role (or (-> ctx :body :user :selected-role)
                  (non-interactive user)
@@ -143,9 +150,17 @@
         user (assoc user :role role)]
     (assoc ctx :user user
            :meta {:realm (get-realm nil user nil)
-                  :user (assoc user
-                               :department-code "000"
-                               :department "No Department")})))
+                  :user  (assoc user
+                                :department-code "000"
+                                :department "No Department")})))
+
+(defmethod check-user-role "id" [ctx]
+  (parse-authorizer-user ctx))
+
+(defmethod check-user-role "m2m" [ctx]
+  (let [ctx (assoc-in ctx [:req :requestContext :authorizer :claims]
+                      (get-in ctx [:req :requestContext :authorizer]))]
+    (parse-authorizer-user ctx)))
 
 (defmethod check-user-role :default
   [{:keys [_ req] :as ctx}]
