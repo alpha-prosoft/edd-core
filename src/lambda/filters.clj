@@ -165,6 +165,14 @@
 (defmethod check-user-role "m2m" [ctx]
   (get-in ctx [:req :requestContext :authorizer]))
 
+(defmethod check-user-role "id" [ctx]
+  (parse-authorizer-user ctx))
+
+(defmethod check-user-role "m2m" [ctx]
+  (let [ctx (assoc-in ctx [:req :requestContext :authorizer :claims]
+                      (get-in ctx [:req :requestContext :authorizer]))]
+    (parse-authorizer-user ctx)))
+
 (defmethod check-user-role :default
   [{:keys [req] :as ctx}]
   (jwt/parse-token
