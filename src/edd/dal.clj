@@ -50,6 +50,9 @@
 (defmulti store-results
   (fn [ctx] (:edd-event-store ctx)))
 
+(defmulti get-records
+  (fn [ctx _query] (:edd-event-store ctx)))
+
 (defmulti with-init
   (fn [ctx _body-fn] (:edd-event-store ctx)))
 

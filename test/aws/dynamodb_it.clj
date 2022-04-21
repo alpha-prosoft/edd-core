@@ -47,7 +47,7 @@
     (with-redefs [uuid/gen (fn [] effect-id)]
       (dal/store-results (assoc ctx
                                 :resp {:events     [event]
-                                       :commands   [command]
+                                       :effects    [command]
                                        :sequences  []
                                        :identities [identity]})))
 
