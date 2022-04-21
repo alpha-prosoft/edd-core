@@ -24,7 +24,7 @@
   [service]
   (str "https://api."
        (util/get-env "PrivateHostedZoneName")
-       "/legacy/"
+       "/private/prod/"
        (name service)
        "/query"))
 

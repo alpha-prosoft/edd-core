@@ -54,3 +54,27 @@
                          :request-id     request-id
                          :service        "it"}]}
              (dal/get-records ctx {:interaction-id interaction-id}))))))
+
+(deftest test-no-events-generated
+  (let [interaction-id (uuid/gen)
+        request-id (uuid/gen)
+        ctx (assoc ctx
+                   :interaction-id interaction-id
+                   :request-id request-id)
+
+        id (uuid/gen)
+        cmd {:cmd-id :do-nothing
+             :id     id}]
+    (let [ctx (-> ctx
+                  (edd/reg-cmd :do-nothing (fn [_ctx cmd]))
+                  (dynamodb/register))]
+      (is (= {:effects    []
+              :events     0
+              :identities 0
+              :meta       [{:do-nothing {:id id}}]
+              :sequences  0
+              :success    true}
+             (mock/handle-cmd ctx cmd)))
+      (is (= {:events  []
+              :effects []}
+             (dal/get-records ctx {:interaction-id interaction-id}))))))

@@ -110,54 +110,55 @@
 (defmethod store-results
   :dynamodb
   [{:keys [resp] :as ctx}]
-  (dynamodb/make-request
-   (assoc ctx :action "TransactWriteItems"
-          :body
-          {:TransactItems
-           (concat (map
-                    (fn [event]
-                      {:Put
-                       {:Item      {"Id"            {:S (:id event)}
-                                    "ItemType"      {:S :event}
-                                    "Service"       {:S (keyword
-                                                         (:service-name ctx))}
-                                    "RequestId"     {:S (:request-id ctx)}
-                                    "InteractionId" {:S (:interaction-id ctx)}
-                                    "EventSeq"      {:N (str (:event-seq event))}
-                                    "Data"          {:S (util/to-json event)}},
-                        :TableName (table-name ctx :event-store)}})
-                    (:events resp))
-                   (map
-                    (fn [effect]
-                      {:Put
-                       {:Item      {"Id"            {:S (uuid/gen)}
-                                    "ItemType"      {:S :effect}
-                                    "Service"       {:S (keyword
-                                                         (:service-name ctx))}
-                                    "TargetService" {:S (:service effect)}
-                                    "RequestId"     {:S (:request-id ctx)}
-                                    "InteractionId" {:S (:interaction-id ctx)}
-                                    "Data"          {:S (util/to-json (assoc effect
-                                                                             :request-id (:request-id ctx)
-                                                                             :interaction-id (:interaction-id ctx)))}},
-                        :TableName (table-name ctx :effect-store)}})
-                    (:effects resp))
-                   (map
-                    (fn [item]
-                      {:Put
-                       {:Item      {"Id"            {:S (str
-                                                         (:service-name ctx)
-                                                         "/"
-                                                         (:identity item))}
-                                    "ItemType"      {:S :identity}
-                                    "Service"       {:S (keyword
-                                                         (:service-name ctx))}
-                                    "RequestId"     {:S (:request-id ctx)}
-                                    "InteractionId" {:S (:interaction-id ctx)}
-                                    "AggregateId"   {:S (:id item)}
-                                    "Data"          {:S (util/to-json item)}},
-                        :TableName (table-name ctx :identity-store)}})
-                    (:identities resp)))}))
+  (let [items (concat (map
+                       (fn [event]
+                         {:Put
+                          {:Item      {"Id"            {:S (:id event)}
+                                       "ItemType"      {:S :event}
+                                       "Service"       {:S (keyword
+                                                            (:service-name ctx))}
+                                       "RequestId"     {:S (:request-id ctx)}
+                                       "InteractionId" {:S (:interaction-id ctx)}
+                                       "EventSeq"      {:N (str (:event-seq event))}
+                                       "Data"          {:S (util/to-json event)}},
+                           :TableName (table-name ctx :event-store)}})
+                       (:events resp))
+                      (map
+                       (fn [effect]
+                         {:Put
+                          {:Item      {"Id"            {:S (uuid/gen)}
+                                       "ItemType"      {:S :effect}
+                                       "Service"       {:S (keyword
+                                                            (:service-name ctx))}
+                                       "TargetService" {:S (:service effect)}
+                                       "RequestId"     {:S (:request-id ctx)}
+                                       "InteractionId" {:S (:interaction-id ctx)}
+                                       "Data"          {:S (util/to-json (assoc effect
+                                                                                :request-id (:request-id ctx)
+                                                                                :interaction-id (:interaction-id ctx)))}},
+                           :TableName (table-name ctx :effect-store)}})
+                       (:effects resp))
+                      (map
+                       (fn [item]
+                         {:Put
+                          {:Item      {"Id"            {:S (str
+                                                            (:service-name ctx)
+                                                            "/"
+                                                            (:identity item))}
+                                       "ItemType"      {:S :identity}
+                                       "Service"       {:S (keyword
+                                                            (:service-name ctx))}
+                                       "RequestId"     {:S (:request-id ctx)}
+                                       "InteractionId" {:S (:interaction-id ctx)}
+                                       "AggregateId"   {:S (:id item)}
+                                       "Data"          {:S (util/to-json item)}},
+                           :TableName (table-name ctx :identity-store)}})
+                       (:identities resp)))]
+    (when-not (empty? items)
+      (dynamodb/make-request
+       (assoc ctx :action "TransactWriteItems"
+              :body
+              {:TransactItems items}))))
   ctx)
 
 (defmethod get-records
