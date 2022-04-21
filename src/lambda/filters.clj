@@ -106,12 +106,14 @@
         (get user :roles [])))
 
 (defn get-realm
-  [_ {:keys [roles]} _]
+  [ctx {:keys [roles]} _]
   (let [realm-prefix "realm-"
         realm (->> roles
                    (map name)
                    (filter #(str/starts-with? % realm-prefix))
-                   (first))]
+                   (first))
+        realm (or realm
+                  (get-in ctx [:auth :default-realm]))]
     (when-not realm
       (throw (ex-info (str "Realm: " realm) {:error "Missing realm in request token"})))
     (keyword (subs realm (count realm-prefix)))))
@@ -123,13 +125,16 @@
     #(= % :non-interactive)
     (:roles user))))
 
-(defn extract-m2m-user [authorizer]
+(defn extract-m2m-user
+  [ctx authorizer]
   (let [groups (-> authorizer
                    :claims
                    :cognito:groups
                    (str/split #","))
         groups (map keyword groups)]
-    {:id    (-> authorizer :claims :email)
+    {:id    (-> authorizer
+                :claims
+                (get (keyword (get-in ctx [:auth :mapping :id] "email"))))
      :roles groups
      :role  (first groups)
      :email (-> authorizer :claims :email)}))
@@ -141,7 +146,7 @@
 
 (defn parse-authorizer-user
   [ctx]
-  (let [user (extract-m2m-user (-> ctx :req :requestContext :authorizer))
+  (let [user (extract-m2m-user ctx (-> ctx :req :requestContext :authorizer))
         role (or (-> ctx :body :user :selected-role)
                  (non-interactive user)
                  (first (remove #(or (= % :anonymous)
@@ -149,7 +154,7 @@
                                 (:roles user))))
         user (assoc user :role role)]
     (assoc ctx :user user
-           :meta {:realm (get-realm nil user nil)
+           :meta {:realm (get-realm ctx user nil)
                   :user  (assoc user
                                 :department-code "000"
                                 :department "No Department")})))
@@ -183,7 +188,7 @@
                                               :email (:email user)
                                               :role  role
                                               :roles (:roles user [])}
-                                   :meta {:realm (get-realm body user role)
+                                   :meta {:realm (get-realm ctx user role)
                                           :user  {:id              (:id user)
                                                   :email           (:email user)
                                                   :role            role
