@@ -13,6 +13,7 @@
                     log-request
                     log-request-error
                     log-response
+                    get-records
                     store-results]]
    [lambda.util :as util]
    [lambda.uuid :as uuid]))
@@ -140,7 +141,7 @@
                                                                              :request-id (:request-id ctx)
                                                                              :interaction-id (:interaction-id ctx)))}},
                         :TableName (table-name ctx :effect-store)}})
-                    (:commands resp))
+                    (:effects resp))
                    (map
                     (fn [item]
                       {:Put
@@ -158,6 +159,28 @@
                         :TableName (table-name ctx :identity-store)}})
                     (:identities resp)))}))
   ctx)
+
+(defmethod get-records
+  :dynamodb
+  [ctx {:keys [interaction-id]}]
+  (let [events (dynamodb/make-request
+                (assoc ctx :action "Scan"
+                       :body {:FilterExpression          "InteractionId = :v1"
+                              :ExpressionAttributeValues {":v1" {:S interaction-id}}
+                              :TableName                 (table-name ctx :event-store)}))
+        effects (dynamodb/make-request
+                 (assoc ctx :action "Scan"
+                        :body {:FilterExpression          "InteractionId = :v1"
+                               :ExpressionAttributeValues {":v1" {:S interaction-id}}
+                               :TableName                 (table-name ctx :effect-store)}))]
+    {:events  (map
+               (fn [event]
+                 (util/to-edn (get-in event [:Data :S])))
+               (get events :Items []))
+     :effects (map
+               (fn [effect]
+                 (util/to-edn (get-in effect [:Data :S])))
+               (get effects :Items []))}))
 
 (defmethod with-init
   :dynamodb

@@ -22,8 +22,7 @@
             [next.jdbc.prepare :as p]
             [edd.db :as db]
             [lambda.util :as util])
-  (:import [com.zaxxer.hikari HikariDataSource]
-           [com.zaxxer.hikari HikariConfig]))
+  (:import [com.zaxxer.hikari HikariDataSource]))
 
 (def errors
   {:concurrent-modification ["pkey" "duplicate key value violates unique constraint"]})

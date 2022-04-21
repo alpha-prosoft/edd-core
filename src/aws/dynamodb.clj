@@ -5,7 +5,7 @@
 
 (defn make-request
   [{:keys [aws action body]}]
-  (log/info "Make request" body)
+  (log/info "Make request" (util/to-json body))
   (let [req {:method     "POST"
              :uri        "/"
              :query      ""
