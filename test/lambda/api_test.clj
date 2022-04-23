@@ -187,7 +187,9 @@
     :User-Agent                   ["Custom User Agent String"]}})
 
 (defn m2m_request
-  [body & {:keys [token path http-method] :or {token jwt-test/token}}]
+  [body & {:keys [token path http-method groups]
+           :or   {token  jwt-test/token
+                  groups "realm-test,users"}}]
   {:path                            "/integration/canary/event-log",
    :queryStringParameters           "None",
    :pathParameters                  {:stage "canary", :function "event-log"},
@@ -241,7 +243,7 @@
     :requestId         "7e42b0a7-465e-4f43-aaf0-95e049fcf05b",
     :domainName        "api.lime-dev12.internal.rbigroup.cloud",
     :authorizer
-    {:cognito:groups     "realm-test,users",
+    {:cognito:groups     groups,
      :user               "rbi-glms-m2m-prod"
      :token_use          "m2m"
      :email              "rbi-glms-m2m-prod@rbi.cloud"
@@ -408,6 +410,44 @@
           {:selected-role :group-2}}
          :user {:id    "rbi-glms-m2m-prod@rbi.cloud"
                 :roles [:realm-test :users]
+                :role  :group-2
+                :email "rbi-glms-m2m-prod@rbi.cloud"}})
+       :statusCode      200}
+      :method :post
+      :url    "http://mock/2018-06-01/runtime/invocation/0/response"}
+     {:timeout 90000000
+      :method  :get
+      :url     "http://mock/2018-06-01/runtime/invocation/next"}])))
+
+(deftest test-m2m-authentication-with-no-groups
+  (mock-core
+   :invocations [(api-request-m2m dummy-cmd :groups nil)]
+   (core/start
+    {}
+    (fn [ctx body]
+      {:source body
+       :user   (:user ctx)})
+    :filters [fl/from-api]
+    :post-filter fl/to-api)
+   (verify-traffic-edn
+    [{:body
+      {:headers
+       {:Access-Control-Allow-Headers  "Id, VersionId, X-Authorization,Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
+        :Access-Control-Expose-Headers "*"
+        :Access-Control-Allow-Methods  "OPTIONS,POST,PUT,GET"
+        :Access-Control-Allow-Origin   "*"
+        :Content-Type                  "application/json"}
+       :isBase64Encoded false
+       :body
+       (util/to-json
+        {:source
+         {:commands
+          [{:id     #uuid "c5c4d4df-0570-43c9-a0c5-2df32f3be124"
+            :cmd-id :dummy-cmd}]
+          :user
+          {:selected-role :group-2}}
+         :user {:id    "rbi-glms-m2m-prod@rbi.cloud"
+                :roles []
                 :role  :group-2
                 :email "rbi-glms-m2m-prod@rbi.cloud"}})
        :statusCode      200}

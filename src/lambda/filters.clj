@@ -129,8 +129,11 @@
   [ctx authorizer]
   (let [groups (-> authorizer
                    :claims
-                   :cognito:groups
-                   (str/split #","))
+                   :cognito:groups)
+        groups (if groups
+                 (-> groups
+                     (str/split #","))
+                 [])
         groups (map keyword groups)]
     {:id    (-> authorizer
                 :claims
