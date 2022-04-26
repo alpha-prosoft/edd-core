@@ -80,6 +80,7 @@
              :interaction-id interaction-id,
              :commands       [{:cmd-id :ping}]}]
     (mock-core
+     :env {"Region" "eu-west-1"}
      :invocations [(api-request cmd)]
      (core/start
       (register)
@@ -125,6 +126,7 @@
                                                                    "/0/local-test.json")}]}
                                              (util/to-edn message))))]
         (mock-core
+         :env {"Region" "eu-west-1"}
          :invocations [(api-request cmd)]
          (core/start
           ctx
@@ -139,10 +141,9 @@
                                                          :user  {:email "john.smith@example.com"
                                                                  :id    "john.smith@example.com"
                                                                  :role  :group-1
-                                                                 :department-code nil
-                                                                 :department nil}}
-                                             :role      :group-1
-                                             :user      "john.smith@example.com"}])
+                                                                 :roles [:group-1
+                                                                         :group-3
+                                                                         :group-2]}}}])
            (verify-traffic-edn
             [{:body   {:body            (util/to-json
                                          {:result         {:success    true
