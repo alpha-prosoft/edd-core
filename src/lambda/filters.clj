@@ -4,22 +4,22 @@
             [clojure.string :as str]
             [sdk.aws.s3 :as s3]
             [lambda.jwt :as jwt]
-            [aws.aws :as aws]
             [lambda.uuid :as uuid]))
 
 (def from-queue
-  {:cond (fn [{:keys [body]}]
-           (if (and
-                (contains? body :Records)
-                (= (:eventSource (first (:Records body))) "aws:sqs"))
-             true
-             false))
-   :fn   (fn [{:keys [body] :as ctx}]
-           (assoc ctx
-                  :body (util/to-edn (-> body
-                                         (:Records)
-                                         (first)
-                                         (:body)))))})
+  {:condition (fn [{:keys [body]}]
+                (if (and
+                     (contains? body :Records)
+                     (= (:eventSource (first (:Records body))) "aws:sqs"))
+                  true
+                  false))
+   :handler   (fn [{:keys [body] :as ctx} filter-chain]
+                (let [ctx (assoc ctx
+                                 :body
+                                 (mapv
+                                  #(util/to-edn (:body %))
+                                  (:Records body)))]
+                  (apply filter-chain [ctx])))})
 
 (defn parse-key
   [key]
@@ -65,40 +65,52 @@
                        :data (ex-data e)})))))
 
 (def from-bucket
-  {:cond (fn [{:keys [body]}]
-           (if (and
-                (contains? body :Records)
-                (= (:eventSource (first (:Records body))) "aws:s3")) true))
-   :fn   (fn [{:keys [body] :as ctx}]
-           (-> ctx
-               (assoc-in [:user :id] (name (:service-name ctx)))
-               (assoc-in [:user :role] :non-interactive)
-               (assoc :body
-                      (let [record (first (:Records body))
-                            key (get-in record [:s3 :object :key])
-                            bucket (get-in record [:s3 :bucket :name])]
-                        (log/info "Parsing key" key)
-                        (if-not (str/ends-with? key "/")
-                          (let [{:keys [request-id
-                                        interaction-id
-                                        date
-                                        realm
-                                        id] :as parsed-key} (parse-key key)]
-                            (log/info "Parsing success " parsed-key)
-                            {:request-id     request-id
-                             :interaction-id interaction-id
-                             :user           (name (:service-name ctx))
-                             :meta           {:realm (keyword realm)
-                                              :user  {:id    request-id
-                                                      :email "non-interractiva@s3.amazonws.com"
-                                                      :role  :non-interactive}}
-                             :commands       [{:cmd-id :object-uploaded
-                                               :id     id
-                                               :body   (s3/get-object ctx record)
-                                               :date   date
-                                               :bucket bucket
-                                               :key    key}]})
-                          {:skip true})))))})
+  {:condition (fn [{:keys [body]}]
+                (when (and (vector? body)
+                           (> (count body) 1))
+                  (throw (ex-info "Unknown constalation"
+                                  {:message "I dont know how you could have vector here since s3 is not batching
+                                             triggers."})))
+                (let [body (if (vector? body)
+                             (first body)
+                             body)]
+                  (and
+                   (contains? body :Records)
+                   (= (:eventSource (first (:Records body))) "aws:s3"))))
+   :handler   (fn [{:keys [body] :as ctx} filter-chain]
+                (let [body (if (vector? body)
+                             (first body)
+                             body)
+                      ctx (-> ctx
+                              (assoc-in [:user :id] (name (:service-name ctx)))
+                              (assoc-in [:user :role] :non-interactive)
+                              (assoc :body
+                                     (let [record (first (:Records body))
+                                           key (get-in record [:s3 :object :key])
+                                           bucket (get-in record [:s3 :bucket :name])]
+                                       (log/info "Parsing key" key)
+                                       (if-not (str/ends-with? key "/")
+                                         (let [{:keys [request-id
+                                                       interaction-id
+                                                       date
+                                                       realm
+                                                       id] :as parsed-key} (parse-key key)]
+                                           (log/info "Parsing success " parsed-key)
+                                           {:request-id     request-id
+                                            :interaction-id interaction-id
+                                            :user           (name (:service-name ctx))
+                                            :meta           {:realm (keyword realm)
+                                                             :user  {:id    request-id
+                                                                     :email "non-interractiva@s3.amazonws.com"
+                                                                     :role  :non-interactive}}
+                                            :commands       [{:cmd-id :object-uploaded
+                                                              :id     id
+                                                              :body   (s3/get-object ctx record)
+                                                              :date   date
+                                                              :bucket bucket
+                                                              :key    key}]})
+                                         {:skip true}))))]
+                  (apply filter-chain [ctx])))})
 
 (defn has-role?
   [user role]
@@ -155,30 +167,24 @@
      groups)))
 
 (defmulti check-user-role
-  (fn [ctx]
-    (get-in (:req ctx) [:requestContext :authorizer :claims :token_use]
-            (get-in (:req ctx) [:requestContext :authorizer :token_use]))))
+  (fn [{:keys [request] :as _ctx}]
+    (get-in request [:requestContext :authorizer :claims :token_use]
+            (get-in request [:requestContext :authorizer :token_use]))))
 
-(defmethod check-user-role "id" [ctx]
-  (get-in ctx [:req :requestContext :authorizer :claims]))
+(defmethod check-user-role "id"
+  [{:keys [request] :as _ctx}]
+  (get-in request [:requestContext :authorizer :claims]))
 
-(defmethod check-user-role "m2m" [ctx]
-  (get-in ctx [:req :requestContext :authorizer]))
-
-(defmethod check-user-role "id" [ctx]
-  (parse-authorizer-user ctx))
-
-(defmethod check-user-role "m2m" [ctx]
-  (let [ctx (assoc-in ctx [:req :requestContext :authorizer :claims]
-                      (get-in ctx [:req :requestContext :authorizer]))]
-    (parse-authorizer-user ctx)))
+(defmethod check-user-role "m2m"
+  [{:keys [request] :as _ctx}]
+  (get-in request [:requestContext :authorizer]))
 
 (defmethod check-user-role :default
-  [{:keys [req] :as ctx}]
+  [{:keys [request] :as ctx}]
   (jwt/parse-token
    ctx
-   (or (get-in req [:headers :x-authorization])
-       (get-in req [:headers :X-Authorization]))))
+   (or (get-in request [:headers :x-authorization])
+       (get-in request [:headers :X-Authorization]))))
 
 (defn extract-attrs
   [user-claims]
@@ -241,37 +247,51 @@
                               :realm (get-realm ctx user {})
                               :user (dissoc user :realm))))))
 
-(def from-api
-  {:init jwt/fetch-jwks-keys
-   :cond (fn [{:keys [body]}]
-           (contains? body :path))
-   :fn   (fn [{:keys [req body] :as ctx}]
-           (let [{http-method :httpMethod
-                  path        :path} req]
-             (cond
-               (= path "/health")
-               (assoc ctx :health-check true)
+(defn create-headers
+  [content-type]
+  {:Access-Control-Allow-Headers  (str/join
+                                   ","
+                                   ["Id" "VersionId" "X-Authorization" "Content-Type"
+                                    "X-Amz-Date" "Authorization" "X-Api-Key" "X-Amz-Security-Token"])
+   :Access-Control-Allow-Methods  "OPTIONS,POST,PUT,GET"
+   :Access-Control-Expose-Headers "*"
+   :Content-Type                  content-type
+   :Access-Control-Allow-Origin   "*"})
 
-               (= http-method "OPTIONS")
-               (assoc ctx :health-check true)
+(def default-headers (create-headers "application/json"))
 
-               :else (-> ctx
-                         (assoc :body (util/to-edn (:body body)))
-                         (assign-metadata)))))})
-
-(defn to-api
-  [{:keys [resp resp-content-type resp-serializer-fn]
+(defn from-api-handler
+  [{:keys [body request resp-content-type resp-serializer-fn]
     :or   {resp-content-type  "application/json"
            resp-serializer-fn util/to-json}
-    :as   ctx}]
-  (log/debug "to-api" resp)
-  (let [resp (aws/produce-compatible-error-response resp)]
-    (assoc ctx
-           :resp {:statusCode      200
-                  :isBase64Encoded false
-                  :headers         {"Access-Control-Allow-Headers"  "Id, VersionId, X-Authorization,Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
-                                    "Access-Control-Allow-Methods"  "OPTIONS,POST,PUT,GET"
-                                    "Access-Control-Expose-Headers" "*"
-                                    "Content-Type"                  resp-content-type
-                                    "Access-Control-Allow-Origin"   "*"}
-                  :body            (resp-serializer-fn resp)})))
+    :as   ctx}
+   filter-chain]
+  (let [{http-method :httpMethod
+         path        :path
+         isBase64Encoded :isBase64Encoded} request
+        resp (cond
+               (= path "/health") {:healthy  true
+                                   :build-id (util/get-env "BuildId" "b0")}
+
+               (= http-method "OPTIONS") {:healthy  true
+                                          :build-id (util/get-env "BuildId" "b0")}
+
+               :else (apply filter-chain [(-> ctx
+                                              (assoc :body (cond-> (:body body)
+                                                             isBase64Encoded util/base64decode
+                                                             :always util/to-edn))
+                                              (assign-metadata))]))]
+    {:statusCode      200
+     :isBase64Encoded false
+     :headers        (create-headers resp-content-type)
+     :body           (resp-serializer-fn resp)}))
+
+(def from-api
+  {:init jwt/fetch-jwks-keys
+   :condition (fn [{:keys [body]}]
+                (contains? body :path))
+   :handler   from-api-handler})
+
+(defn to-api
+  [_ctx]
+  (log/warn "Response filter should not be used any more"))

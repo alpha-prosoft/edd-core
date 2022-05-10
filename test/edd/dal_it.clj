@@ -1,5 +1,5 @@
 (ns edd.dal-it
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest testing is]]
             [clojure.tools.logging :as log]
             [lambda.util :as util]
             [lambda.uuid :as uuid]
@@ -8,7 +8,6 @@
             [edd.postgres.event-store :as postgres]
             [edd.dynamodb.event-store :as dynamodb]
             [edd.view-store.elastic :as view-store]
-            [lambda.test.fixture.state :as state]
             [edd.core :as edd]
             [edd.common :as common]))
 

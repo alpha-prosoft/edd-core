@@ -1,7 +1,7 @@
 (ns lambda.http-client-test
   (:require [clojure.test :refer :all]
             [lambda.http-client :as http-client]
-            [edd.util :as edd-util]))
+            [lambda.util :as util]))
 
 (deftest test-http-client
   (is (= {:connect-timeout 300
@@ -31,10 +31,8 @@
 
 (deftest exception-test
   (let [ex (RuntimeException. "t1")]
-    (is (= {:error   ex
-            :message "t1"}
-           (edd-util/try-parse-exception-data ex))))
+    (is (= {:exception "t1"}
+           (util/exception->response ex))))
   (let [ex (ex-info "t1" {:some "error"})]
-    (is (= {:error   ex
-            :message {:some "error"}}
-           (edd-util/try-parse-exception-data ex)))))
+    (is (= {:exception  {:some "error"}}
+           (util/exception->response ex)))))

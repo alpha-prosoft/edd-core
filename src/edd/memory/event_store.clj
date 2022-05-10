@@ -32,12 +32,11 @@
    :response-log   []
    :command-log    []})
 
-(def ^:dynamic *dal-state* (atom (assoc default-db
-                                        :global true)))
+(def ^:dynamic *event-store* (atom default-db))
 
 (defn get-db
-  [ctx]
-  *dal-state*)
+  []
+  *event-store*)
 
 (defn store-sequence
   "Stores sequence in memory structure.
@@ -45,14 +44,14 @@
   [ctx {:keys [id]}]
   {:pre [id]}
   (log/info "Emulated 'store-sequence' dal function")
-  (let [store (:sequence-store @(get-db ctx))
+  (let [store (:sequence-store @(get-db))
         sequence-already-exists (some
                                  #(= (:id %) id)
                                  store)
         max-number (count store)]
     (if sequence-already-exists
       (throw (RuntimeException. "Sequence already exists")))
-    (swap! (get-db ctx)
+    (swap! (get-db)
            #(update % :sequence-store (fn [v] (conj v {:id    id
                                                        :value (inc max-number)}))))))
 
@@ -63,11 +62,11 @@
   (log/info "Emulated 'store-identity' dal function")
   (let [id-fn (juxt :id :identity)
         id (id-fn identity)
-        store (:identity-store @(get-db ctx))
+        store (:identity-store @(get-db))
         id-already-exists (some #(= (id-fn %) id) store)]
     (when id-already-exists
       (throw (RuntimeException. "Identity already exists")))
-    (swap! (get-db ctx)
+    (swap! (get-db)
            #(update % :identity-store (fn [v] (conj v (dissoc identity
                                                               :request-id
                                                               :interaction-id
@@ -86,7 +85,7 @@
 (defn peek-cmd!
   []
   (let [popq (fn [q] (if (seq q) (pop q) []))
-        [old new] (swap-vals! (:command-queue state/*queues*) popq)]
+        [old _new] (swap-vals! (:command-queue state/*queues*) popq)]
     (peek old)))
 
 (defn enqueue-cmd! [cmd]
@@ -101,19 +100,19 @@
 
 (defn store-command
   "Stores command in memory structure"
-  [ctx cmd]
+  [_ctx cmd]
   (log/info "Emulated 'store-cmd' dal function")
-  (swap! (get-db ctx)
+  (swap! (get-db)
          #(update % :command-store (fnil conj []) (clean-commands cmd)))
   (enqueue-cmd! cmd))
 
 (defn get-stored-commands
-  [ctx]
-  (get (get-db ctx) :command-store []))
+  [_ctx]
+  (get (get-db) :command-store []))
 
 (defn store-event
   "Stores event in memory structure"
-  [ctx event]
+  [_ctx event]
   (log/info "Emulated 'store-event' dal function")
   (let [aggregate-id (:id event)]
     (when (some (fn [e]
@@ -121,10 +120,10 @@
                           aggregate-id)
                        (= (:event-seq e)
                           (:event-seq event))))
-                (:event-store @(get-db ctx)))
+                (:event-store @(get-db)))
       (throw (ex-info "Already existing event" {:id        aggregate-id
                                                 :event-seq (:event-seq event)})))
-    (swap! (get-db ctx)
+    (swap! (get-db)
            #(update % :event-store (fn [v]
                                      (sort-by
                                       :event-seq
@@ -133,7 +132,7 @@
                                                :interaction-id
                                                :request-id))))))))
 (defn store-events
-  [events])
+  [_events])
 
 (defn store-results-impl
   [ctx resp]
@@ -162,7 +161,7 @@
   {:pre [id]}
   "Reads event from vector under :event-store key"
   (log/info "Emulated 'get-events' dal function")
-  (let [resp (->> @(get-db ctx)
+  (let [resp (->> @(get-db)
                   (:event-store)
                   (filter #(and (= (:id %) id)
                                 (if version (> (:event-seq %) version) true)))
@@ -173,20 +172,20 @@
 
 (defmethod get-sequence-number-for-id
   :memory
-  [{:keys [id] :as ctx}]
+  [{:keys [id] :as _ctx}]
   {:pre [id]}
-  (let [store (:sequence-store @(get-db ctx))
+  (let [store (:sequence-store @(get-db))
         entry (first (filter #(= (:id %) id)
                              store))]
     (:value entry)))
 
 (defmethod get-command-response
   :memory
-  [{:keys [request-id breadcrumbs] :as ctx}]
+  [{:keys [request-id breadcrumbs] :as _ctx}]
 
   (log/info "Emulating get-command-response-log" request-id breadcrumbs)
   (when (and request-id breadcrumbs)
-    (let [store (:response-log (get-db ctx))]
+    (let [store (:response-log (get-db))]
       (first
        (filter #(and (= (:request-id %) request-id)
                      (= (:breadcrumbs %) breadcrumbs))
@@ -194,21 +193,21 @@
 
 (defmethod get-id-for-sequence-number
   :memory
-  [{:keys [sequence] :as ctx}]
+  [{:keys [sequence] :as _ctx}]
   {:pre [sequence]}
-  (let [store (:sequence-store @(get-db ctx))
+  (let [store (:sequence-store @(get-db))
         entry (first (filter #(= (:value %) sequence)
                              store))]
     (:id entry)))
 
 (defn get-max-event-seq-impl
-  [{:keys [id] :as ctx}]
+  [{:keys [id] :as _ctx}]
   (log/info "Emulated 'get-max-event-seq' dal function with fixed return value 0")
   (let [resp (map
               #(:event-seq %)
               (filter
                #(= (:id %) id)
-               (:event-store @(get-db ctx))))]
+               (:event-store @(get-db))))]
     (if (> (count resp) 0)
       (apply
        max
@@ -222,10 +221,10 @@
 
 (defmethod get-aggregate-id-by-identity
   :memory
-  [{:keys [identity] :as ctx}]
+  [{:keys [identity] :as _ctx}]
   {:pre [identity]}
   (log/info "Emulating get-aggregate-id-by-identity" identity)
-  (let [store (:identity-store @(get-db ctx))]
+  (let [store (:identity-store @(get-db))]
     (if (coll? identity)
       (->> store
            (filter (fn [it]
@@ -246,62 +245,38 @@
 
 (defmethod log-request
   :memory
-  [ctx body]
+  [_ctx body]
   (log/info "Storing mock request" body)
-  (swap! (get-db ctx)
+  (swap! (get-db)
          #(update % :command-log (fn [v] (conj v body)))))
 
 (defmethod log-request-error
   :memory
-  [ctx body error]
+  [_ctx body error]
   (log/info "Should store mock request error" body error))
 
 (defmethod log-dps
   :memory
   [{:keys [dps-resolved] :as ctx}]
   (log/debug "Storing mock dps" dps-resolved)
-  (swap! (get-db ctx)
+  (swap! (get-db)
          #(update % :dps-log (fn [v] (conj v dps-resolved))))
   ctx)
 
 (defmethod log-response
   :memory
-  [{:keys [response-summary request-id breadcrumbs] :as ctx}]
+  [{:keys [response-summary request-id breadcrumbs] :as _ctx}]
   (log/info "Storing mock response" response-summary)
-  (swap! (get-db ctx)
+  (swap! (get-db)
          #(update % :response-log (fn [v] (conj v {:request-id  request-id
                                                    :breadcrumbs breadcrumbs
                                                    :data        response-summary})))))
 
-(defn is-locally-bound
-  "Returns is DB is filled in locally. It will be always bound?
-   but we want it to be bound per test also and globally for repl testing"
-  [state-ref]
-  (not
-   (:global @state-ref)))
-
 (defmethod with-init
-  :memory
+  :memork
   [ctx body-fn]
   (log/debug "Initializing memory event store")
-  (if (is-locally-bound *dal-state*)
-    (do
-      (swap! *dal-state*
-             #(merge
-               default-db
-               (select-keys
-                ctx
-                (keys default-db))
-               %))
-      (body-fn ctx))
-    (binding [*dal-state* (atom (merge
-                                 default-db
-                                 (util/fix-keys
-                                  (select-keys
-                                   ctx
-                                   (keys default-db)))
-                                 {:global false}))]
-      (body-fn ctx))))
+  (body-fn ctx))
 
 (defn register
   [ctx]

@@ -1,40 +1,31 @@
 (ns lambda.core-test
-  (:require [clojure.test :refer :all]
-            [clojure.tools.logging :as log]
-            [edd.el.event :as event]
-            [aws.lambda :as core]
+  (:require [clojure.test :refer [deftest testing is]]
+            [lambda.core :as core]
+            [lambda.util :as util]
             [lambda.filters :as filters]))
 
 (def ctx-filter
   {:init (fn [ctx]
            (assoc ctx :init-value "bla"))
-   :cond (fn [{:keys [body]}]
-           (contains? body :test))
-   :fn   (fn [{:keys [body] :as ctx}]
-           (assoc ctx
-                  :body {:resp "Bla"}))})
-
-(def ctx {:filters [ctx-filter]})
-
-(def user
-  {:id "anon"
-   :email "anon@ymous.com"
-   :roles [:anonymous]
-   :selected-role :anonymous})
+   :condition (fn [{:keys [body]}]
+                (contains? body :test))
+   :handler   (fn [_ctx _filter-chain]
+                {:resp "Bla"})})
 
 (deftest test-apply-filter
   (let [resp (core/apply-filters
-              (assoc ctx
-                     :req {:test "Yes"}))]
+              {:body {:test "Yes"}}
+              [ctx-filter])]
     (is (=  {:resp "Bla"}
-            (:body resp)))))
+            resp))))
 
 (deftest test-init-filter
-  (let [ctx (core/init-filters {:some-value "true"
-                                :filters [ctx-filter
-                                          filters/to-api
-                                          filters/from-api]})]
-    (is (= "true"
-           (:some-value ctx)))
-    (is (= "bla"
-           (:init-value ctx)))))
+  (with-redefs [util/load-config (fn [_name] {})]
+    (let [ctx (core/init-filters {}
+                                 [ctx-filter
+                                  filters/to-api
+                                  filters/from-api])]
+      (is (= true
+             (:filter-initialized ctx)))
+      (is (= "bla"
+             (:init-value ctx))))))

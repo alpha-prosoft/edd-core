@@ -1,15 +1,14 @@
 (ns edd.apply-batch-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest testing is]]
             [lambda.util :as util]
+            [aws.runtime :as runtime]
             [lambda.uuid :as uuid]
-            [lambda.test.fixture.client :refer [verify-traffic-edn]]
-            [lambda.test.fixture.core :refer [mock-core]]
+            [lambda.test.fixture.client :as client]
+            [lambda.test.fixture.core :refer [mock-core] :as fixture-core]
             [edd.core :as edd]
-            [lambda.core :as core]
-            [edd.test.fixture.dal :as mock]
+            [lambda.filters :as filters]
             [edd.memory.event-store :as event-store]
             [edd.view-store.elastic :as view-store]
-            [lambda.test.fixture.client :as client]
             [edd.el.event :as event]
             [sdk.aws.common :as common]))
 
@@ -19,8 +18,6 @@
 (def req-id2 (uuid/gen))
 (def req-id3 (uuid/gen)) 3
 
-(def req-id4 (uuid/gen)) 3
-(def req-id5 (uuid/gen)) 3
 (def int-id (uuid/gen))
 
 (defn req
@@ -46,92 +43,102 @@
 
 (def ctx
   (-> {}
-      (assoc :service-name "local-test"
-             :meta {:realm :test})
+      (assoc :meta {:realm :test}
+             :edd {:config {:secrets-file "files/secret-eu-west.json"}})
       (event-store/register)
       (view-store/register)
-      (edd/reg-cmd :cmd-1 (fn [ctx cmd]
+      (edd/reg-cmd :cmd-1 (fn [_ctx cmd]
                             {:id       (:id cmd)
                              :event-id :event-1
                              :name     (:name cmd)}))
-      (edd/reg-cmd :cmd-2 (fn [ctx cmd]
+      (edd/reg-cmd :cmd-2 (fn [_ctx _cmd]
                             {:error "failed"}))
       (edd/reg-event :event-1
-                     (fn [agg event]
+                     (fn [agg _event]
                        (merge agg
                               {:value "1"})))
       (edd/reg-event :event-2
-                     (fn [agg event]
+                     (fn [_agg _event]
                        (throw (ex-info "Sory" {:something "happened"}))))))
-
+0
 (deftest apply-when-two-events-1
-  (with-redefs [common/create-date (fn [] "20210322T232540Z")
-                event/get-by-id (fn [ctx]
-                                  (assoc ctx
-                                         :aggregate {:id agg-id}))]
-    (mock-core
-     :invocations [(util/to-json (req
-                                  [{:apply          {:service      "glms-booking-company-svc",
-                                                     :aggregate-id agg-id}
-                                    :meta           {:realm :test}
-                                    :request-id     req-id1
-                                    :interaction-id int-id}
-                                   {:apply          {:service      "glms-booking-company-svc",
-                                                     :aggregate-id agg-id}
+  (testing
+   "We apply 3 events, we should update aggregate only once"
+    (with-redefs [event/get-by-id (fn [ctx]
+                                    (assoc ctx
+                                           :aggregate {:id agg-id}))]
+      (mock-core
+       {:env {"Region" "eu-west-1"}
+        :responses [{:method :post
+                     :url "https://sqs.eu-west-1.amazonaws.com/11111111111/test-evets-queue"
+                     :response {:status 200
+                                :body nil}}
+                    {:method :post
+                     :url (str "https://"
+                               view-store/default-endpoint
+                               "/test_local_svc/_doc/" agg-id)
+                     :response {:status 200
+                                :body "{}"}}
+                    {:method :post
+                     :url (str "https://"
+                               view-store/default-endpoint
+                               "/test_local_svc/_doc/" agg-id)
+                     :response {:status 200
+                                :body "{}"}}
+                    {:method :post
+                     :url (str "https://"
+                               view-store/default-endpoint
+                               "/test_local_svc/_doc/" agg-id)
+                     :response {:status 200
+                                :body "{}"}}]}
+       (runtime/lambda-requests
+        ctx
+        edd/handler
+        [(req
+          [{:apply          {:service      "glms-booking-company-svc",
+                             :aggregate-id agg-id}
+            :meta           {:realm :test}
+            :request-id     req-id1
+            :interaction-id int-id}
+           {:apply          {:service      "glms-booking-company-svc",
+                             :aggregate-id agg-id}
 
-                                    :meta           {:realm :test}
-                                    :request-id     req-id2
-                                    :interaction-id int-id}
-                                   {:apply          {:service      "glms-booking-company-svc",
-                                                     :aggregate-id agg-id}
-                                    :request-id     req-id3
-                                    :meta           {:realm :test}
-                                    :interaction-id int-id}]))]
-
-     :requests [{:post "https://sqs.eu-central-1.amazonaws.com/11111111111/test-evets-queue"}
-                {:post   (str "https://"
-                              view-store/default-endpoint
-                              "/test_local_test/_doc/" agg-id)
-                 :status 200}
-                {:post   (str "https://"
-                              view-store/default-endpoint
-                              "/test_local_test/_doc/" agg-id)
-                 :status 200}
-                {:post   (str "https://"
-                              view-store/default-endpoint
-                              "/test_local_test/_doc/" agg-id)
-                 :status 200}]
-     (core/start
-      ctx
-      edd/handler)
-     (verify-traffic-edn [{:body   [{:result         {:apply true}
-                                     :invocation-id  0
-                                     :request-id     req-id1,
-                                     :interaction-id int-id}
-                                    {:result         {:apply true}
-                                     :invocation-id  0
-                                     :request-id     req-id2,
-                                     :interaction-id int-id}
-                                    {:result         {:apply true}
-                                     :invocation-id  0
-                                     :request-id     req-id3,
-                                     :interaction-id int-id}]
-                           :method :post
-                           :url    "http://mock/2018-06-01/runtime/invocation/0/response"}
-                          {:body            {:id agg-id}
-                           :headers         {"Authorization"        "AWS4-HMAC-SHA256 Credential=/20210322/eu-central-1/es/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=ab1a70f0e461912913f915bee46ebf1df7c742edab626007e33d747195613d39"
-                                             "Content-Type"         "application/json"
-                                             "X-Amz-Date"           "20210322T232540Z"
-                                             "X-Amz-Security-Token" ""}
-                           :method          :post
-                           :idle-timeout    20000
-                           :connect-timeout 300
-                           :url             (str "https://"
-                                                 view-store/default-endpoint
-                                                 "/test_local_test/_doc/05120289-90f3-423c-ad9f-c46f9927a53e")}
-                          {:method  :get
-                           :timeout 90000000
-                           :url     "http://mock/2018-06-01/runtime/invocation/next"}]))))
+            :meta           {:realm :test}
+            :request-id     req-id2
+            :interaction-id int-id}
+           {:apply          {:service      "glms-booking-company-svc",
+                             :aggregate-id agg-id}
+            :request-id     req-id3
+            :meta           {:realm :test}
+            :interaction-id int-id}])]
+        :filters [filters/from-queue])
+       (is (= [{:body   [{:result         {:apply true}
+                          :invocation-id  #uuid "00000000-0000-0000-0000-000000000000"
+                          :request-id     req-id1,
+                          :interaction-id int-id}
+                         {:result         {:apply true}
+                          :invocation-id  #uuid "00000000-0000-0000-0000-000000000000"
+                          :request-id     req-id2,
+                          :interaction-id int-id}
+                         {:result         {:apply true}
+                          :invocation-id  #uuid "00000000-0000-0000-0000-000000000000"
+                          :request-id     req-id3,
+                          :interaction-id int-id}]
+                :method :post
+                :url    "http://mock/2018-06-01/runtime/invocation/00000000-0000-0000-0000-000000000000/response"}
+               {:body            {:id agg-id}
+                :headers         {"Content-Type" "application/json",
+                                  "X-Amz-Date" "20200426T061823Z",
+                                  "X-Amz-Security-Token" "",
+                                  "Authorization"
+                                  "AWS4-HMAC-SHA256 Credential=/20200426/eu-west-1/es/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=d6fa5b1fe9961831802b4db838785b9b6b6032bc35cbd0a77d87234226bd790f"}
+                :method          :post
+                :idle-timeout    20000
+                :connect-timeout 300
+                :url             (str "https://"
+                                      view-store/default-endpoint
+                                      "/test_local_svc/_doc/05120289-90f3-423c-ad9f-c46f9927a53e")}]
+              (client/traffic-edn)))))))
 
 (deftest apply-when-error-all-failed
   (with-redefs [common/create-date (fn [] "20210322T232540Z")
@@ -145,51 +152,54 @@
                                   (assoc ctx
                                          :aggregate {:id agg-id}))
                 event/update-aggregate (fn [ctx]
-                                         (if (= (:request-id ctx)
-                                                req-id1)
+                                         (when (= (:request-id ctx)
+                                                  req-id1)
                                            (throw (ex-info "Something" {:badly :un-happy}))))]
     (mock-core
-     :invocations [(util/to-json (req
-                                  [{:apply          {:service      "glms-booking-company-svc",
-                                                     :aggregate-id agg-id}
-                                    :request-id     req-id1
-                                    :interaction-id int-id}
-                                   {:apply          {:service      "glms-booking-company-svc",
-                                                     :aggregate-id agg-id}
-                                    :request-id     req-id2
-                                    :interaction-id int-id}
-                                   {:apply          {:service      "glms-booking-company-svc",
-                                                     :aggregate-id agg-id}
-                                    :request-id     req-id3
-                                    :interaction-id int-id}]))]
-
-     :requests [{:post "https://sqs.eu-central-1.amazonaws.com/11111111111/test-evets-queue"}
-                {:post   (str "https:///local_test/_doc/" agg-id)
-                 :status 200}
-                {:post   (str "https:///local_test/_doc/" agg-id)
-                 :status 200}
-                {:post   (str "https:///local_test/_doc/" agg-id)
-                 :status 200}]
-     (core/start
+     {:responses [{:method :post
+                   :url "https://sqs.eu-central-1.amazonaws.com/11111111111/test-evets-queue"
+                   :response {:body "{}"}}
+                  {:method :post
+                   :url (str "https:///local_test/_doc/" agg-id)
+                   :response {:body "{}"}}
+                  {:method :post
+                   :url (str "https:///local_test/_doc/" agg-id)
+                   :response {:body "{}"}}
+                  {:method :post
+                   :url (str "https:///local_test/_doc/" agg-id)
+                   :response {:body "{}"}}]}
+     (runtime/lambda-requests
       ctx
-      edd/handler)
-     (verify-traffic-edn [{:body   [{:error          {:badly :un-happy}
-                                     :invocation-id  0
-                                     :request-id     req-id1,
-                                     :interaction-id int-id}
-                                    {:error          {:badly :1wrong}
-                                     :invocation-id  0
-                                     :request-id     req-id2,
-                                     :interaction-id int-id}
-                                    {:error          "Non clojure error"
-                                     :invocation-id  0
-                                     :request-id     req-id3,
-                                     :interaction-id int-id}]
-                           :method :post
-                           :url    "http://mock/2018-06-01/runtime/invocation/0/error"}
-                          {:method  :get
-                           :timeout 90000000
-                           :url     "http://mock/2018-06-01/runtime/invocation/next"}]))))
+      edd/handler
+      [(req
+        [{:apply          {:service      "glms-booking-company-svc",
+                           :aggregate-id agg-id}
+          :request-id     req-id1
+          :interaction-id int-id}
+         {:apply          {:service      "glms-booking-company-svc",
+                           :aggregate-id agg-id}
+          :request-id     req-id2
+          :interaction-id int-id}
+         {:apply          {:service      "glms-booking-company-svc",
+                           :aggregate-id agg-id}
+          :request-id     req-id3
+          :interaction-id int-id}])]
+      :filters [filters/from-queue])
+     (is (= [{:body   [{:error          {:badly :un-happy}
+                        :invocation-id  fixture-core/inocation-id-0
+                        :request-id     req-id1,
+                        :interaction-id int-id}
+                       {:error          {:badly :1wrong}
+                        :invocation-id  fixture-core/inocation-id-0
+                        :request-id     req-id2,
+                        :interaction-id int-id}
+                       {:error          "Non clojure error"
+                        :invocation-id  fixture-core/inocation-id-0
+                        :request-id     req-id3,
+                        :interaction-id int-id}]
+              :method :post
+              :url    fixture-core/error-endpoint-o}]
+            (client/traffic-edn))))))
 
 
 

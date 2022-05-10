@@ -14,8 +14,9 @@
    (str "http://" runtime-api "/2018-06-01/runtime/invocation/next")
    {:timeout 90000000}))
 
-(defn get-next-request [runtime-api]
-  (let [req (get-next-invocation runtime-api)]
+(defn get-next-request []
+  (let [runtime-api (util/get-env "AWS_LAMBDA_RUNTIME_API")
+        req (get-next-invocation runtime-api)]
     (if (-> req :body :isBase64Encoded)
       (update-in req [:body :body] util/base64decode)
       req)))
@@ -40,17 +41,17 @@
         (flatten resp))))))
 
 (defn send-success
-  [{:keys [api
-           invocation-id
+  [{:keys [invocation-id
            from-api] :as ctx} body]
 
   (log/info "Response from-api?" from-api)
   (util/d-time "Enqueueing success"
                (enqueue-response ctx body))
-  (util/to-json
-   (util/http-post
-    (str "http://" api "/2018-06-01/runtime/invocation/" invocation-id "/response")
-    {:body (util/to-json body)})))
+  (let [runtime-api (util/get-env "AWS_LAMBDA_RUNTIME_API")]
+    (util/to-json
+     (util/http-post
+      (str "http://" runtime-api "/2018-06-01/runtime/invocation/" invocation-id "/response")
+      body))))
 
 (defn produce-compatible-error-response
   "Because we rely on error on client we will replace :exception to :error"
@@ -62,38 +63,42 @@
      resp)))
 
 (defn send-error
-  [{:keys [api
-           invocation-id
+  [{:keys [invocation-id
            from-api
-           req] :as ctx} body]
-  (let [target (if from-api
+           request] :as ctx} body]
+  (let [runtime-api (util/get-env "AWS_LAMBDA_RUNTIME_API")
+        target (if from-api
                  "response"
                  "error")]
+    (print "Sensing error")
     (when-not from-api
-      (let [items (interleave body
-                              (:Records req))
-            items-to-delete (->> (partition 2 items)
-                                 (filter (fn [[a _]]
-                                           (not (:exception a))))
-                                 (map
-                                  (fn [[_ b]]
-                                    b)))]
+      (let [items-to-delete (reduce
+                             (fn [items [response record]]
+                               (if (and (not (:exception response))
+                                        (= (:eventSource record) "aws:sqs"))
+                                 (conj items record)
+                                 items))
+                             []
+                             (->> (interleave
+                                   body
+                                   (:Records request))
+                                  (partition 2)))]
         (when (and (> (count items-to-delete) 0)
                    (= (count body)
-                      (count (:Records req))))
+                      (count (:Records request))))
           (sqs/delete-message-batch ctx items-to-delete))))
 
     (util/d-time "Enqueueing error"
                  (enqueue-response ctx body))
 
-    (let [body (produce-compatible-error-response body)
-          resp (util/to-json body)]
-      (log/error resp)
+    (let [body (produce-compatible-error-response body)]
+      (log/error body)
       (util/to-json
        (util/http-post
-        (str "http://" api "/2018-06-01/runtime/invocation/" invocation-id "/" target)
-        {:body resp})))))
+        (str "http://" runtime-api "/2018-06-01/runtime/invocation/" invocation-id "/" target)
+        body)))))
 
+;; => #'aws.aws/send-error
 (defn get-or-set
   [cache key get-fn]
   (let [current-time (util/get-current-time-ms)

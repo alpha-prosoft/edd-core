@@ -1,27 +1,18 @@
 (ns edd.aggregate-test
   (:require [edd.core :as edd]
             [edd.dal :as dal]
-            [edd.search :as search]
             [edd.el.event :as event]
-            [clojure.test :refer :all]
+            [clojure.test :refer [deftest testing is]]
             [lambda.util :as util]
-            [lambda.util :as util]
-            [lambda.test.fixture.core :refer [mock-core]]
-            [lambda.test.fixture.client :refer [verify-traffic-edn]]
-
-            [edd.postgres.event-store :as postgres-event-store]
             [edd.view-store.elastic :as elastic-view-store]
             [edd.view-store.impl.elastic.mock :as mock-elastic-impl]
             [edd.test.fixture.dal :as mock]
-            [edd.el.query :as query]
-            [lambda.s3-test :as s3]
             [lambda.uuid :as uuid]))
 
 (def cmd-id (uuid/parse "111111-1111-1111-1111-111111111111"))
 
 (def apply-ctx
   (-> mock/ctx
-      (merge {:service-name "local-test"})
       (edd/reg-event
        :event-1 (fn [p v]
                   (assoc p :e1 v)))
@@ -29,7 +20,7 @@
        :event-2 (fn [p v]
                   (assoc p :e2 v)))
       (edd/reg-agg-filter
-       (fn [{:keys [agg] :as ctx}]
+       (fn [{:keys [agg] :as _ctx}]
          (assoc
           agg
           :filter-result
@@ -62,54 +53,65 @@
                             :event-seq 2
                             :id        cmd-id}}
            agg))))
-(deftest test-apply-cmd
-  (with-redefs [search/simple-search identity]
-
-    (try
-      (event/handle-event (-> apply-ctx
-                              (postgres-event-store/register)
-                              (assoc :apply
-                                     {:aggregate-id 1})))
-      (catch Exception e
-        (is (= "Postgres error"
-               (.getMessage e)))))))
 
 (deftest test-apply-cmd-storing-error
-  (with-redefs [mock-elastic-impl/update-aggregate-impl (fn [_ _]
-                                                          (throw (ex-info "Error saving" {})))
-                dal/get-events (fn [_]
-                                 [{:event-id :event-1
-                                   :id       cmd-id
-                                   :k1       "a"}
-                                  {:event-id :event-2
-                                   :id       cmd-id
-                                   :k2       "b"}])]
+  (mock/with-mock-dal
+    (with-redefs [mock-elastic-impl/update-aggregate-impl (fn [_ _]
+                                                            (throw (ex-info "Error saving" {})))
+                  dal/get-events (fn [_]
+                                   [{:event-id :event-1
+                                     :id       cmd-id
+                                     :k1       "a"}
+                                    {:event-id :event-2
+                                     :id       cmd-id
+                                     :k2       "b"}])]
 
-    (is (thrown? Exception
-                 (event/handle-event (-> apply-ctx
-                                         (elastic-view-store/register :implementation :mock)
-                                         (assoc :apply {:aggregate-id cmd-id
-                                                        :apply        :cmd-1})))))))
+      (is (= {:exception {}}
+             (mock/handle-event (-> apply-ctx
+                                    (elastic-view-store/register :implementation :mock))
+                                {:apply {:aggregate-id cmd-id
+                                         :apply        :cmd-1}}))))))
 
 (deftest test-apply-cmd-storing-response-error
-  (with-redefs [dal/get-events (fn [_]
-                                 [{:event-id :event-1
-                                   :id       cmd-id
-                                   :k1       "a"}
-                                  {:event-id :event-2
-                                   :id       cmd-id
-                                   :k2       "b"}])
-                util/http-get (fn [url request & {:keys [raw]}]
-                                {:status 404})
-                util/http-post (fn [url request & {:keys [raw]}]
-                                 {:status 303
-                                  :body   "Sorry"})]
-    (try
-      (event/handle-event (-> apply-ctx
-                              elastic-view-store/register
-                              (assoc
-                               :apply {:aggregate-id cmd-id})))
-      (catch Exception e
-        (is (= {:error {:status  303
-                        :message "Sorry"}}
-               (ex-data e)))))))
+  (let [posts (atom [])
+        gets (atom [])]
+    (with-redefs [util/http-request (fn [url {:keys [method] :as request} & {:keys [_raw]}]
+                                      (case method
+                                        :get (do (swap! gets conj url)
+                                                 {:status 404})
+                                        :put (do
+                                               (swap! posts conj request)
+                                               {:status 303
+                                                :body   "Sorry"})
+                                        :post (do
+                                                (swap! posts conj request)
+                                                {:status 303
+                                                 :body   "Sorry"})))]
+      (mock/with-mock-dal
+        {:event-store [{:event-id :event-1
+                        :id       cmd-id
+                        :k1       "a"}
+                       {:event-id :event-2
+                        :id       cmd-id
+                        :k2       "b"}]}
+
+        (is (= {:exception {:message "Sorry", :status 303}}
+               (mock/handle-event (-> apply-ctx
+                                      elastic-view-store/register)
+                                  {:apply {:aggregate-id cmd-id}})))
+        (is (= [{:e1
+                 {:event-id :event-1,
+                  :id #uuid "00111111-1111-1111-1111-111111111111",
+                  :k1 "a"},
+                 :e2
+                 {:event-id :event-2,
+                  :id #uuid "00111111-1111-1111-1111-111111111111",
+                  :k2 "b"},
+                 :filter-result "ab",
+                 :id #uuid "00111111-1111-1111-1111-111111111111",
+                 :version nil}]
+               (->> @posts
+                    (map :body)
+                    (mapv util/to-edn))))
+        (is (= ["https://127.0.0.1:9200/no_realm_local_svc/_doc/00111111-1111-1111-1111-111111111111"]
+               @gets))))))

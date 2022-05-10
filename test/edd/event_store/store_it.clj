@@ -1,22 +1,20 @@
 (ns edd.event-store.store-it
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest testing is]]
             [edd.core :as edd]
-            [edd.el.cmd :as cmd]
             [edd.view-store.elastic :as elastic]
             [edd.dynamodb.event-store :as dynamodb]
             [edd.test.fixture.dal :as mock]
             [lambda.uuid :as uuid]
-            [runtime.aws :as aws-runtime]
+            [aws.ctx :as aws-ctx]
             [lambda.util :as util]
             [edd.response.cache :as response-cache]
-            [lambda.ctx :as lambda-ctx]
             [edd.dal :as dal]))
 
 (def ctx (-> {}
              (response-cache/register-default)
-             (aws-runtime/init)
-             (lambda-ctx/set-service-name "it")
-             (assoc :environment-name-lower (util/get-env
+             (aws-ctx/init)
+             (assoc :service-name "it"
+                    :environment-name-lower (util/get-env
                                              "EnvironmentNameLower"))
              (assoc-in [:db :name] "dynamodb-svc")
              (elastic/register :implementation :mock)
@@ -35,25 +33,25 @@
         id (uuid/gen)
         cmd {:cmd-id :create-product
              :id     id
-             :attrs  {:name "Product name"}}]
-    (let [ctx (-> ctx
-                  (dynamodb/register))]
-      (mock/execute-cmd ctx cmd)
-      (is (= {:events  [{:attrs          {:name "Product name"}
-                         :event-id       :product-created
-                         :event-seq      1
-                         :id             id
-                         :interaction-id interaction-id
-                         :meta           {}
-                         :request-id     request-id}]
-              :effects [{:breadcrumbs    [0
-                                          0]
-                         :commands       [{:cmd-id :notify-product-created}]
-                         :interaction-id interaction-id
-                         :meta           {}
-                         :request-id     request-id
-                         :service        "it"}]}
-             (dal/get-records ctx {:interaction-id interaction-id}))))))
+             :attrs  {:name "Product name"}}
+        ctx (-> ctx
+                (dynamodb/register))]
+    (mock/execute-cmd ctx cmd)
+    (is (= {:events  [{:attrs          {:name "Product name"}
+                       :event-id       :product-created
+                       :event-seq      1
+                       :id             id
+                       :interaction-id interaction-id
+                       :meta           {}
+                       :request-id     request-id}]
+            :effects [{:breadcrumbs    [0
+                                        0]
+                       :commands       [{:cmd-id :notify-product-created}]
+                       :interaction-id interaction-id
+                       :meta           {}
+                       :request-id     request-id
+                       :service        "it"}]}
+           (dal/get-records ctx {:interaction-id interaction-id})))))
 
 (deftest test-no-events-generated
   (let [interaction-id (uuid/gen)
@@ -64,17 +62,18 @@
 
         id (uuid/gen)
         cmd {:cmd-id :do-nothing
-             :id     id}]
-    (let [ctx (-> ctx
-                  (edd/reg-cmd :do-nothing (fn [_ctx cmd]))
-                  (dynamodb/register))]
-      (is (= {:effects    []
-              :events     0
-              :identities 0
-              :meta       [{:do-nothing {:id id}}]
-              :sequences  0
-              :success    true}
-             (mock/handle-cmd ctx cmd)))
-      (is (= {:events  []
-              :effects []}
-             (dal/get-records ctx {:interaction-id interaction-id}))))))
+             :id     id}
+        ctx (-> ctx
+                (edd/reg-cmd :do-nothing (fn [_ctx _cmd]))
+                (dynamodb/register))]
+    (is (= {:result
+            {:effects    []
+             :events     0
+             :identities 0
+             :meta       [{:do-nothing {:id id}}]
+             :sequences  0
+             :success    true}}
+           (mock/handle-cmd ctx cmd)))
+    (is (= {:events  []
+            :effects []}
+           (dal/get-records ctx {:interaction-id interaction-id})))))

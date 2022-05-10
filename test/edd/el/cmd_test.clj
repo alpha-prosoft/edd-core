@@ -1,22 +1,22 @@
 (ns edd.el.cmd-test
   (:require [clojure.test :refer [deftest is]]
             [edd.el.cmd :as el-cmd]
+            [aws.runtime :as runtime]
             [edd.core :as edd]
-            [lambda.core :as core]
             [lambda.filters :as fl]
             [lambda.util :as util]
-            [lambda.test.fixture.client :refer [verify-traffic-edn]]
-            [lambda.test.fixture.core :refer [mock-core]]
-            [lambda.api-test :refer [api-request]]
-            [lambda.uuid :as uuid]
+            [lambda.test.fixture.client :as client]
             [edd.test.fixture.dal :as mock]
+            [lambda.test.fixture.core :refer [mock-core] :as core-mock]
+            [lambda.api-test :as api-test]
+            [lambda.uuid :as uuid]
             [sdk.aws.sqs :as sqs]
             [edd.el.ctx :as el-ctx]
             [lambda.request :as request]
             [aws.aws :as aws])
   (:import (clojure.lang ExceptionInfo)))
 
-(def ctx (-> {}
+(def ctx (-> mock/ctx
              (edd/reg-cmd :ssa (fn [_ _]))))
 
 (deftest test-empty-commands-list
@@ -55,6 +55,7 @@
         cmd-missing {:cmd-id :test-unknown
                      :id     (uuid/gen)}
         cmd-invalid {:cmd-id :test
+                     :id     (uuid/gen)
                      :name   :wrong}
         cmd-valid {:cmd-id :test
                    :name   "name"
@@ -80,32 +81,23 @@
              :interaction-id interaction-id,
              :commands       [{:cmd-id :ping}]}]
     (mock-core
-     :env {"Region" "eu-west-1"}
-     :invocations [(api-request cmd)]
-     (core/start
+     {:env {"Region" "eu-west-1"}}
+     (runtime/lambda-requests
       (register)
       edd/handler
-      :filters [fl/from-api]
-      :post-filter fl/to-api)
+      [(api-test/cognito-authorizer-request (util/to-json cmd))]
+      :filters [fl/from-api])
 
-     (verify-traffic-edn
-      [{:body   {:body            (util/to-json
-                                   {:invocation-id  0
-                                    :request-id     request-id
-                                    :interaction-id interaction-id
-                                    :error          [{:id ["missing required key"]}]})
-                 :headers         {:Access-Control-Allow-Headers  "Id, VersionId, X-Authorization,Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
-                                   :Access-Control-Allow-Methods  "OPTIONS,POST,PUT,GET"
-                                   :Access-Control-Allow-Origin   "*"
-                                   :Access-Control-Expose-Headers "*"
-                                   :Content-Type                  "application/json"}
-                 :isBase64Encoded false
-                 :statusCode      200}
-        :method :post
-        :url    "http://mock/2018-06-01/runtime/invocation/0/response"}
-       {:method  :get
-        :timeout 90000000
-        :url     "http://mock/2018-06-01/runtime/invocation/next"}]))))
+     (is (= [{:body   {:body            {:invocation-id  core-mock/inocation-id-0
+                                         :request-id     request-id
+                                         :interaction-id interaction-id
+                                         :exception          [{:id ["missing required key"]}]}
+                       :headers         fl/default-headers
+                       :isBase64Encoded false
+                       :statusCode      200}
+              :method :post
+              :url   core-mock/response-endpoint-o}]
+            (client/traffic-edn))))))
 
 (deftest api-handler-response-test
 
@@ -115,98 +107,86 @@
         ctx (register)
         cmd {:request-id     request-id,
              :interaction-id interaction-id,
-             :user           {:selected-role :group-1}
+             :user           {:selected-role :users}
              :commands       [{:cmd-id :ping
                                :id     id}]}]
-    (mock/with-mock-dal
-      ctx
-      (with-redefs [sqs/sqs-publish (fn [{:keys [message]}]
-                                      (is (= {:Records [{:key (str "response/"
-                                                                   request-id
-                                                                   "/0/local-test.json")}]}
-                                             (util/to-edn message))))]
-        (mock-core
-         :env {"Region" "eu-west-1"}
-         :invocations [(api-request cmd)]
-         (core/start
-          ctx
-          edd/handler
-          :filters [fl/from-api]
-          :post-filter fl/to-api)
-         (do
-           (mock/verify-state :event-store [{:event-id  :ping
-                                             :event-seq 1
-                                             :id        id
-                                             :meta      {:realm :test
-                                                         :user  {:email "john.smith@example.com"
-                                                                 :id    "john.smith@example.com"
-                                                                 :role  :group-1
-                                                                 :roles [:group-1
-                                                                         :group-3
-                                                                         :group-2]}}}])
-           (verify-traffic-edn
-            [{:body   {:body            (util/to-json
-                                         {:result         {:success    true
-                                                           :effects    []
-                                                           :events     1
-                                                           :meta       [{:ping {:id id}}]
-                                                           :identities 0
-                                                           :sequences  0}
-                                          :invocation-id  0
-                                          :request-id     request-id
-                                          :interaction-id interaction-id})
-                       :headers         {:Access-Control-Allow-Headers  "Id, VersionId, X-Authorization,Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
-                                         :Access-Control-Allow-Methods  "OPTIONS,POST,PUT,GET"
-                                         :Access-Control-Allow-Origin   "*"
-                                         :Access-Control-Expose-Headers "*"
-                                         :Content-Type                  "application/json"}
-                       :isBase64Encoded false
-                       :statusCode      200}
-              :method :post
-              :url    "http://mock/2018-06-01/runtime/invocation/0/response"}
-             {:method  :get
-              :timeout 90000000
-              :url     "http://mock/2018-06-01/runtime/invocation/next"}])))))))
+    (with-redefs [sqs/sqs-publish (fn [{:keys [message]}]
+                                    (is (= {:Records [{:key (str "response/"
+                                                                 request-id
+                                                                 "/0/local-svc.json")}]}
+                                           (util/to-edn message))))]
+      (mock/with-mock-dal
+        {:env {"Region" "eu-west-1"}}
+        (runtime/lambda-requests
+         ctx
+         edd/handler
+         [(api-test/cognito-authorizer-request (util/to-json cmd))]
+         :filters [fl/from-api])
+        (do
+          (mock/verify-state :event-store [{:event-id  :ping
+                                            :event-seq 1
+                                            :id        id
+                                            :meta      {:realm :test
+                                                        :user
+                                                        {:id "rbi-glms-m2m-prod@rbi.cloud",
+                                                         :roles [:users],
+                                                         :email "rbi-glms-m2m-prod@rbi.cloud",
+                                                         :role :users}}}])
+          (is (= [{:body   {:body            {:result         {:success    true
+                                                               :effects    []
+                                                               :events     1
+                                                               :meta       [{:ping {:id id}}]
+                                                               :identities 0
+                                                               :sequences  0}
+                                              :invocation-id  core-mock/inocation-id-0
+                                              :request-id     request-id
+                                              :interaction-id interaction-id}
+                            :headers        fl/default-headers
+                            :isBase64Encoded false
+                            :statusCode      200}
+                   :method :post
+                   :url    core-mock/response-endpoint-o}]
+                 (client/traffic-edn))))))))
 
 (deftest test-cache-partitioning
-  (let [ctx {:service-name "local-test"
+  (let [ctx {:service-name "local-svc"
              :breadcrumbs  "0"
              :request-id   "1"}]
-    (is (= {:key "response/1/0/local-test.json"}
+    (is (= {:key "response/1/0/local-svc.json"}
            (el-cmd/resp->cache-partitioned ctx {:effects [{:a :b}]})))
-    (is (= [{:key "response/1/0/local-test-part.0.json"}
-            {:key "response/1/0/local-test-part.1.json"}]
+    (is (= [{:key "response/1/0/local-svc-part.0.json"}
+            {:key "response/1/0/local-svc-part.1.json"}]
            (el-cmd/resp->cache-partitioned (el-ctx/set-effect-partition-size ctx 2)
                                            {:effects [{:a :b} {:a :b} {:a :b}]})))))
 
 (deftest enqueue-response
-  (binding [request/*request* (atom {:cache-keys [{:key "response/0/0/local-test-0.json"}
-                                                  {:key "response/1/0/local-test-part.0.json"}
-                                                  {:key "response/1/0/local-test-part.1.json"}
-                                                  {:key "response/2/0/local-test-2.json"}]})]
+  (binding [request/*request* (atom {:cache-keys [{:key "response/0/0/local-svc-0.json"}
+                                                  {:key "response/1/0/local-svc-part.0.json"}
+                                                  {:key "response/1/0/local-svc-part.1.json"}
+                                                  {:key "response/2/0/local-svc-2.json"}]})]
     (let [messages (atom [])]
       (with-redefs [sqs/sqs-publish (fn [{:keys [message]}]
                                       (swap! messages #(conj % message)))]
         (aws/enqueue-response ctx {})
-        (is (= [{:Records [{:key "response/0/0/local-test-0.json"}]}
-                {:Records [{:key "response/1/0/local-test-part.0.json"}]}
-                {:Records [{:key "response/1/0/local-test-part.1.json"}]}
-                {:Records [{:key "response/2/0/local-test-2.json"}]}]
+        (is (= [{:Records [{:key "response/0/0/local-svc-0.json"}]}
+                {:Records [{:key "response/1/0/local-svc-part.0.json"}]}
+                {:Records [{:key "response/1/0/local-svc-part.1.json"}]}
+                {:Records [{:key "response/2/0/local-svc-2.json"}]}]
                (map
                 #(util/to-edn %)
                 @messages))))))
-  (binding [request/*request* (atom {:cache-keys [{:key "response/0/0/local-test-0.json"}
-                                                  [{:key "response/1/0/local-test-part.0.json"}
-                                                   {:key "response/1/0/local-test-part.1.json"}]
-                                                  {:key "response/2/0/local-test-2.json"}]})]
+  (binding [request/*request* (atom {:cache-keys [{:key "response/0/0/local-svc-0.json"}
+                                                  [{:key "response/1/0/local-svc-part.0.json"}
+                                                   {:key "response/1/0/local-svc-part.1.json"}]
+                                                  {:key "response/2/0/local-svc-2.json"}]})]
     (let [messages (atom [])]
       (with-redefs [sqs/sqs-publish (fn [{:keys [message]}]
                                       (swap! messages #(conj % message)))]
         (aws/enqueue-response ctx {})
-        (is (= [{:Records [{:key "response/0/0/local-test-0.json"}]}
-                {:Records [{:key "response/1/0/local-test-part.0.json"}]}
-                {:Records [{:key "response/1/0/local-test-part.1.json"}]}
-                {:Records [{:key "response/2/0/local-test-2.json"}]}]
+        (is (= [{:Records [{:key "response/0/0/local-svc-0.json"}]}
+                {:Records [{:key "response/1/0/local-svc-part.0.json"}]}
+                {:Records [{:key "response/1/0/local-svc-part.1.json"}]}
+                {:Records [{:key "response/2/0/local-svc-2.json"}]}]
                (map
                 #(util/to-edn %)
                 @messages)))))))

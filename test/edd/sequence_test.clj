@@ -1,14 +1,13 @@
 (ns edd.sequence-test
   (:require
-   [clojure.test :refer :all]
-   [aws.lambda  :refer [handle-request]]
+   [clojure.test :refer [deftest testing is]]
    [edd.test.fixture.dal :as mock]
    [edd.core :as edd]
    [lambda.uuid :as uuid]))
 
 (def ctx
   (-> mock/ctx
-      (edd/reg-cmd :create-1 (fn [ctx cmd]
+      (edd/reg-cmd :create-1 (fn [_ctx cmd]
                                [{:sequence :limit-application
                                  :id       (:id cmd)}
                                 {:event-id :e1
@@ -16,7 +15,6 @@
 
 (deftest test-sequence-generation
   (mock/with-mock-dal
-    ctx
     (let [id (uuid/gen)
           resp (mock/handle-cmd
                 ctx
@@ -26,10 +24,11 @@
 
       (mock/verify-state :sequence-store [{:value 1
                                            :id    id}])
-      (is (= {:effects    []
-              :events     1
-              :identities 0
-              :meta      [{:create-1 {:id id}}]
-              :sequences  1
-              :success    true}
+      (is (= {:result
+              {:effects    []
+               :events     1
+               :identities 0
+               :meta      [{:create-1 {:id id}}]
+               :sequences  1
+               :success    true}}
              resp)))))

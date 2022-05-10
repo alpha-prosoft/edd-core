@@ -1,11 +1,9 @@
 (ns edd.el.event
   (:require
-   [edd.flow :refer :all]
    [clojure.tools.logging :as log]
    [edd.dal :as dal]
    [edd.request-cache :as request-cache]
    [lambda.request :as request]
-   [edd.search :as search]
    [edd.view-store.common :as view-store]
    [lambda.util :as util]))
 
@@ -96,25 +94,22 @@
     ctx))
 
 (defn handle-event
-  [{:keys [apply] :as ctx}]
-  (let [meta (:meta apply)
+  [ctx body]
+  (let [apply-request (:apply body)
+        meta (merge (:meta ctx)
+                    (:meta body))
         ctx (assoc ctx :meta meta)
         realm (:realm meta)
-        agg-id (:aggregate-id apply)]
+        agg-id (:aggregate-id apply-request)]
 
     (util/d-time
      (str "handling-apply: " realm " " (:aggregate-id apply))
-     (if (request/is-scoped)
-       (let [applied (get-in @request/*request* [:applied realm agg-id])]
-         (when-not applied
-           (-> ctx
-               (assoc :id agg-id)
-               (get-by-id)
-               (update-aggregate))
-           (swap! request/*request*
-                  #(assoc-in % [:applied realm agg-id] {:apply true}))))
-       (-> ctx
-           (assoc :id agg-id)
-           (get-by-id)
-           (update-aggregate)))))
+     (let [applied (get-in @request/*request* [:applied realm agg-id])]
+       (when-not applied
+         (-> ctx
+             (assoc :id agg-id)
+             (get-by-id)
+             (update-aggregate))
+         (swap! request/*request*
+                #(assoc-in % [:applied realm agg-id] {:apply true}))))))
   {:apply true})

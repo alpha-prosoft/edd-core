@@ -1,7 +1,6 @@
 (ns lambda.filter-test
   (:require [clojure.test :refer :all]
-            [lambda.filters :as lambda-filter]
-            [lambda.jwt-test :as jwt-test]))
+            [lambda.filters :as lambda-filter]))
 
 (def claims
   {:cognito:groups ["lime-risk-managers"

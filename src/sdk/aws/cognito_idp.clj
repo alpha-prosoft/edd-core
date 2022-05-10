@@ -30,11 +30,12 @@
              :secret-key aws-secret-access-key}
         auth (common/authorize req)
         response (client/retry-n
-                  #(util/http-post
+                  #(util/http-request
                     (str "https://" (get (:headers req) "Host"))
                     (client/request->with-timeouts
                      %
-                     {:body    (:payload req)
+                     {:method :post
+                      :body    (:payload req)
                       :headers (-> (:headers req)
                                    (dissoc "Host")
                                    (assoc

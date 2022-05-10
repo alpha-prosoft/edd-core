@@ -1,10 +1,9 @@
 (ns edd.cmd-spec-test
   (:require [clojure.tools.logging :as log]
             [edd.core :as edd]
-            [clojure.test :refer :all]
+            [clojure.test :refer [deftest is]]
             [edd.test.fixture.dal :as mock]
-            [lambda.uuid :as uuid]
-            [edd.el.cmd :as cmd]))
+            [lambda.uuid :as uuid]))
 
 (defn dummy-command-handler
   [_ctx cmd]
@@ -26,7 +25,7 @@
 (deftest test-valid-command
   (mock/with-mock-dal
     ctx
-    (cmd/handle-commands ctx valid-command-request)
+    (mock/handle-cmd ctx valid-command-request)
     (mock/verify-state :event-store [{:event-id  :dummy-event
                                       :handled   true
                                       :event-seq 1
@@ -39,7 +38,7 @@
 (deftest test-missing-id-command
   (mock/with-mock-dal
     ctx
-    (is (= {:error [{:id ["missing required key"]}]}
+    (is (= {:exception [{:id ["missing required key"]}]}
            (mock/handle-cmd
             ctx
             {:cmd-id :dummy-cmd})))))
@@ -47,7 +46,7 @@
 (deftest test-missing-failed-custom-validation-command
   (mock/with-mock-dal
     ctx
-    (is (= {:error [{:name ["missing required key"]}]}
+    (is (= {:exception [{:name ["missing required key"]}]}
            (mock/handle-cmd
             (-> ctx
                 (edd/reg-cmd :dummy-cmd dummy-command-handler

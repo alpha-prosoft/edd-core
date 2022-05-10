@@ -12,8 +12,8 @@ docker-compose up -d
 host="https://admin:admin@127.0.0.1:9200"
 response="null"
 count=1
-until [ "$response" = "200" $count -le 15 ]; do
-    response=$(curl -k --write-out %{http_code} --output /dev/null "$host" || echo "Fail")
+until [[ "$response" = "200" && $count -le 15 ]]; do
+    response=$(curl -k -s --write-out %{http_code} --output /dev/null "$host" || echo "Fail")
     >&2 echo "Elastic Search is unavailable ($count) - sleeping:  ${response}"
     sleep 5
     count=$((count+1))

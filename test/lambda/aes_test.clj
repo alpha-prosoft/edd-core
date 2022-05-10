@@ -1,5 +1,5 @@
 (ns lambda.aes-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest is testing]]
             [lambda.aes :as aes]
             [lambda.util :as util]))
 
@@ -10,11 +10,14 @@
                       "xEgLZisyV2bTh/QrzuVHMA=="))))
 
 (deftest load-config
-  (let [key "xTKVqrYHvOjR1NeoAZ4z0Q==:2WJe1eIGVT3/SItftl0MuA=="]
-    (with-redefs [util/get-env (fn [%]
-                                 key)]
+  (let [env {"CustomConfig" "{}"
+             "ConfigurationContext" "xTKVqrYHvOjR1NeoAZ4z0Q==:2WJe1eIGVT3/SItftl0MuA=="}]
+    (with-redefs [util/get-env (fn [% & [_default]]
+                                 (get env %))]
       (is (= {:auth {:client-id     "1gof0uh5h7pcqat29r65ht1kmf"
                      :client-secret "ctraumfqr6t2i1uhojppks044t9eskmg7tfsn2almacgc1pebl"
+                     :aud "1gof0uh5h7pcqat29r65ht1kmf",
+                     :iss "https://cognito-idp..amazonaws.com/eu-central-1_0c2u3Gtmg"
                      :user-pool-id  "eu-central-1_0c2u3Gtmg"}
               :db   {:password "mypostgres"
                      :username "postgres"}

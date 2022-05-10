@@ -20,8 +20,7 @@
                              log-response
                              store-results]]
             [next.jdbc.prepare :as p]
-            [edd.db :as db]
-            [lambda.util :as util])
+            [edd.db :as db])
   (:import [com.zaxxer.hikari HikariDataSource]))
 
 (def errors
@@ -458,15 +457,28 @@
   (assoc ctx :edd-event-store :postgres))
 
 (defn get-response-log
-  [ctx invocation-id]
-  (log/info "Fetching response" invocation-id)
+  [ctx {:keys [request-id
+               invocation-id
+               interaction-id]}]
+  (log/info "Fetching response" request-id)
   (mapv
    first
-   (-> (jdbc/execute! (:con ctx)
-                      [(str "SELECT data
+   (-> (cond
+         request-id (jdbc/execute! (:con ctx)
+                                   [(str "SELECT data
+                                FROM " (->table ctx :command_response_log) "
+                                WHERE request_id=?") request-id]
+                                   {:builder-fn rs/as-arrays})
+         invocation-id (jdbc/execute! (:con ctx)
+                                      [(str "SELECT data
                                 FROM " (->table ctx :command_response_log) "
                                 WHERE invocation_id=?") invocation-id]
-                      {:builder-fn rs/as-arrays})
+                                      {:builder-fn rs/as-arrays})
+         interaction-id (jdbc/execute! (:con ctx)
+                                       [(str "SELECT data
+                                FROM " (->table ctx :command_response_log) "
+                                WHERE request_id=?") interaction-id]
+                                       {:builder-fn rs/as-arrays}))
        (rest))))
 
 (defn get-request-log

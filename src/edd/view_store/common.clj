@@ -2,6 +2,15 @@
   (:require [malli.core :as m]
             [malli.error :as me]))
 
+(def default-store
+  {:aggregate-store    []})
+
+(def ^:dynamic *view-store* (atom default-store))
+
+(defn get-store
+  []
+  *view-store*)
+
 (defn get-type
   [ctx]
   (get-in ctx [:view-store :type]))

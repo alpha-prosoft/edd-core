@@ -43,11 +43,12 @@
         token (aws/get-token ctx)
         resolved-query (call-query-fn ctx cmd query-fn deps)
         response (http-client/retry-n
-                  #(util/http-post
+                  #(util/http-request
                     url
                     (http-client/request->with-timeouts
                      %
-                     {:body    (util/to-json
+                     {:method :post
+                      :body    (util/to-json
                                 {:query          resolved-query
                                  :meta           (:meta ctx)
                                  :request-id     (:request-id ctx)
@@ -248,7 +249,7 @@
     (cond
       (nil? version) ctx
       (not= version current-version) (throw (ex-info "Wrong version"
-                                                     {:error   :concurrent-modification
+                                                     {:key   :concurrent-modification
                                                       :message "Version mismatch"
                                                       :state   {:current current-version
                                                                 :version version}}))
@@ -408,7 +409,7 @@
     (catch ExceptionInfo e
       (let [data (ex-data e)]
         (request-cache/clear)
-        (if (and (= (get-in data [:error :key])
+        (if (and (= (get-in data [:key])
                     :concurrent-modification)
                  (not (zero? n)))
           (do

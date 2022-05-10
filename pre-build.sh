@@ -1,5 +1,7 @@
 set -e
 
+mkdir -p modules
+
 cd repl
 docker compose down
 docker compose up -d

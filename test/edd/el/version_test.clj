@@ -4,22 +4,23 @@
             [edd.common :as common]
             [lambda.uuid :as uuid]
             [edd.test.fixture.dal :as mock]
-            [edd.dal :as dal]))
+            [edd.dal :as dal]
+            [lambda.ctx :as lambda-ctx]))
 
 (def ctx
   (-> mock/ctx
-      (assoc :service-name :local-test)
+      lambda-ctx/init
       (edd/reg-cmd :cmd-1
-                   (fn [ctx cmd]
+                   (fn [_ctx _cmd]
                      {:event-id :event-1
                       :name     "Test name"})
-                   :dps {:test-dps
-                         (fn [cmd]
-                           {:query-id :get-by-id
-                            :id       (:id cmd)})})
+                   :deps {:test-dps
+                          (fn [_ctx cmd]
+                            {:query-id :get-by-id
+                             :id       (:id cmd)})})
 
       (edd/reg-query :get-by-id common/get-by-id)
-      (edd/reg-event :event-1 (fn [ctx event]
+      (edd/reg-event :event-1 (fn [_ctx event]
                                 {:name (:name event)}))))
 
 (def cmd-id (uuid/parse "111111-1111-1111-1111-111111111111"))

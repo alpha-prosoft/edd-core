@@ -174,7 +174,6 @@
   (swap! request/*request* #(update % :mdc
                                     (fn [mdc]
                                       (-> (assoc mdc
-                                                 :invocation-id (:invocation-id ctx)
                                                  :realm (:realm (get-meta ctx item))
                                                  :request-id (:request-id item)
                                                  :breadcrumbs (or (get item :breadcrumbs) [0])
@@ -189,11 +188,22 @@
          "Unknown error processing item")))
 
 (defn dispatch-item
-  [{:keys [item] :as ctx}]
+  [ctx item]
   (log/debug "Dispatching" item)
-  (update-mdc-for-request ctx item)
-  (let [ctx (assoc ctx :request-id (:request-id item)
-                   :interaction-id (:interaction-id item))]
+  (let [meta (get-meta ctx item)
+        ctx (assoc ctx
+                   :meta meta
+                   :request-id (:request-id item)
+                   :interaction-id (:interaction-id item))
+        invocation-id (get-in @request/*request* [:mdc :invocation-id])
+        log-level (get meta :log-level)
+        mdc (cond-> {:realm (:realm (get-meta ctx item))
+                     :request-id (:request-id item)
+                     :breadcrumbs (or (get item :breadcrumbs) [0])
+                     :interaction-id (:interaction-id item)}
+              log-level (assoc :log-level log-level))]
+
+    (swap! request/*request* #(update % :mdc merge mdc))
     (try
       (let [item (if (contains? item :command)
                    (-> item
@@ -201,25 +211,20 @@
                        (dissoc :command))
                    item)
             resp (cond
-                   (contains? item :apply) (event/handle-event (-> ctx
-                                                                   (assoc :apply (assoc
-                                                                                  (:apply item)
-                                                                                  :meta (get-meta ctx item)))))
-                   (contains? item :query) (-> ctx
-                                               (query/handle-query item))
-                   (contains? item :commands) (-> ctx
-                                                  (cmd/handle-commands item))
+                   (contains? item :apply) (event/handle-event ctx item)
+                   (contains? item :query) (query/handle-query ctx item)
+                   (contains? item :commands) (cmd/handle-commands ctx item)
                    (contains? item :error) item
                    :else (do
                            (log/warn item)
                            {:error :invalid-request}))]
         (if (:error resp)
           {:error          (:error resp)
-           :invocation-id  (:invocation-id ctx)
+           :invocation-id  invocation-id
            :request-id     (:request-id item)
            :interaction-id (:interaction-id ctx)}
           {:result         resp
-           :invocation-id  (:invocation-id ctx)
+           :invocation-id  invocation-id
            :request-id     (:request-id item)
            :interaction-id (:interaction-id ctx)}))
 
@@ -229,82 +234,55 @@
           (let [data (ex-data e)]
             (cond
               (:error data) {:exception      (:error data)
-                             :invocation-id  (:invocation-id ctx)
+                             :invocation-id  invocation-id
                              :request-id     (:request-id item)
                              :interaction-id (:interaction-id ctx)}
 
               data {:exception      data
-                    :invocation-id  (:invocation-id ctx)
+                    :invocation-id  invocation-id
                     :request-id     (:request-id item)
                     :interaction-id (:interaction-id ctx)}
               :else {:exception      (try-parse-exception e)
-                     :invocation-id  (:invocation-id ctx)
+                     :invocation-id  invocation-id
                      :request-id     (:request-id item)
                      :interaction-id (:interaction-id ctx)})))))))
 
 (defn dispatch-request
-  [{:keys [body] :as ctx}]
+  [ctx body]
   (util/d-time
    "Dispatching"
-   (assoc
-    ctx
-    :resp (mapv
-           #(dispatch-item (assoc ctx :item %))
-           body))))
+   (mapv
+    #(dispatch-item ctx %)
+    body)))
 
-(defn filter-queue-request
-  "If request is coming from queue we need to get out all request bodies"
-  [{:keys [body] :as ctx}]
-  (if (contains? body :Records)
-    (let [queue-body (mapv
-                      (fn [it]
-                        (-> it
-                            (:body)
-                            (util/to-edn)))
-                      (-> body
-                          (:Records)))]
-      (-> ctx
-          (assoc :body queue-body
-                 :queue-request true)))
-
-    (assoc ctx :body [body]
-           :queue-request false)))
-
-(defn prepare-response
-  "Wrap non error result into :result keyword"
-  [{:keys [resp] :as ctx}]
-  (if (:queue-request ctx)
-    resp
-    (first resp)))
-
-(def schema
-  [:and
-   [:map
-    [:request-id uuid?]
-    [:interaction-id uuid?]]
-   [:or
-    [:map
-     [:command [:map]]]
-    [:map
-     [:commands sequential?]]
-    [:map
-     [:apply map?]]
-    [:map
-     [:query map?]]]])
+(def EddRequest
+  (m/schema
+   [:vector
+    [:and
+     [:map
+      [:request-id uuid?]
+      [:interaction-id uuid?]]
+     [:or
+      [:map
+       [:command [:map]]]
+      [:map
+       [:commands sequential?]]
+      [:map
+       [:apply map?]]
+      [:map
+       [:query map?]]]]]))
 
 (defn validate-request
-  [{:keys [body] :as ctx}]
-  (log/info "Validating request")
-  (assoc
-   ctx
-   body
-   (mapv
-    #(if (m/validate schema %)
-       %
-       {:error (->> body
-                    (m/explain schema)
-                    (me/humanize))})
-    body)))
+  [_ctx body]
+  (util/d-time
+   "Validating request"
+   (when-not (m/validate EddRequest body)
+     (throw (ex-info "Some request are invalid"
+                     {:message "Some requests are invalid"
+                      :validation (->> body
+                                       (m/explain EddRequest)
+                                       (me/humanize))}))))
+  body)
 
 (defn with-stores
   [ctx body-fn]
@@ -315,15 +293,17 @@
 
 (defn handler
   [ctx body]
-  (log/debug "Handler body" body)
-  (log/debug "Context" ctx)
   (if (:skip body)
     (do (log/info "Skipping request")
         {})
     (with-stores
       ctx
-      #(-> (assoc % :body body)
-           (filter-queue-request)
-           (validate-request)
-           (dispatch-request)
-           (prepare-response)))))
+      #(let [single-request (map? body)
+             body (if (map? body)
+                    [body]
+                    body)
+             body (validate-request % body)
+             response (dispatch-request % body)]
+         (if single-request
+           (first response)
+           response)))))

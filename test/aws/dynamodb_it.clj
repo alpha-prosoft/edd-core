@@ -1,5 +1,5 @@
 (ns aws.dynamodb-it
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest testing is]]
             [lambda.util :as util]
             [aws.dynamodb :as ddb]
             [clojure.string :as str]

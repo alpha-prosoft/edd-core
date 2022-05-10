@@ -1,8 +1,9 @@
 (ns edd.view-store.impl.elastic.mock-search
   (:require
    [clojure.string :as str]
-   [edd.memory.event-store :as event-store]
    [edd.view-store.impl.elastic.common :as common]
+   [edd.view-store.common :as view-store-common]
+
    [clojure.tools.logging :as log]))
 
 (def default-elastic-store {:aggregate-store []})
@@ -164,7 +165,7 @@
 (defn advanced-search-impl
   [_ctx query]
   {:pre [query]}
-  (let [state (->> @event-store/*dal-state*
+  (let [state (->> @(view-store-common/get-store)
                    (:aggregate-store))
         apply-filter (if (:filter query)
                        (common/parse mock (:filter query))

@@ -2,17 +2,14 @@
   (:require [clojure.test :refer :all]
             [lambda.util :as util]
             [lambda.uuid :as uuid]
-            [lambda.test.fixture.client :as client]
             [org.httpkit.client :as http])
 
   (:import (java.time OffsetDateTime)))
-
 
 ; Dear security guy! All tokens and JWKS information here
 ; is from non existing user pools
 ; please go somewhere else to find secrets as there are none usefull
 ; to be found here.
-
 
 (deftest test-parser-deserialization
   (let [result (util/to-edn
@@ -95,7 +92,7 @@
                                   :status 200}))
 
 (deftest test-post-call
-  (with-redefs [http/post (fn [url req] (post-response url (:body req)))]
+  (with-redefs [http/request (fn [{:keys [url] :as req} & [options]] (post-response url (:body req)))]
     (let [expected (util/http-post risk-on-url {:query-id :get-by-id
                                                 :id       "123134"})]
       (is (get-in expected [:body :result]))
@@ -110,14 +107,7 @@
          (util/wrap-body {:a :b})))
 
   (is (= {:form-params {:a :b}}
-         (util/wrap-body {:form-params {:a :b}})))
-
-  (is (= {:body    "sas"
-          :headers "application/x-www-form-urlencoded"}
-         (util/wrap-body {:body    "sas"
-                          :headers "application/x-www-form-urlencoded"})))
-  (is (= {:body {:a :b}}
-         (util/wrap-body {:body {:a :b}}))))
+         (util/wrap-body {:form-params {:a :b}}))))
 
 (deftest base64-encode-test
   (is (= "c2RqbGE3Ly9cfiY/IQ=="
@@ -133,6 +123,7 @@
 
 (def user-pool-client-id "5fb55843f1doj3hjlq7ongfmn1")
 (def user-pool-id "eu-central-1_ACXYul00Q")
+(def user-pool-iss "https://cognito-idp.eu-central-1.amazonaws.com/eu-central-1_ACXYul00Q")
 (def user-pool-client-secret "1as33ab08jtsd778p3nfuivmi1rn4ddci6g58jar399prd19ser")
 
 (deftest hmac256-test-v2

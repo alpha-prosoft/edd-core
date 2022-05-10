@@ -3,24 +3,21 @@
             [clojure.tools.logging :as log]
             [lambda.util :as util]
             [edd.view-store.elastic :as elastic-view-store]
+            [edd.view-store.common :as view-store-common]
             [edd.memory.event-store :as memory-event-store]
-            [edd.search :as search]
-            [lambda.test.fixture.state :as state]
             [edd.search :as search]
             [lambda.elastic :as el]
             [lambda.uuid :as uuid]
             [clojure.string :as str]
+            [aws.ctx :as aws-ctx]
             [edd.test.fixture.dal :as mock]))
 
 (defn ctx
   []
   (let [ctx {:meta {:realm :test}}]
     (if (util/get-env "AWS_ACCESS_KEY_ID")
-      (assoc ctx
-             :aws {:region                (util/get-env "AWS_DEFAULT_REGION")
-                   :aws-access-key-id     (util/get-env "AWS_ACCESS_KEY_ID")
-                   :aws-secret-access-key (util/get-env "AWS_SECRET_ACCESS_KEY")
-                   :aws-session-token     (util/get-env "AWS_SESSION_TOKEN")})
+      (-> {}
+          aws-ctx/init)
       ctx)))
 
 (defn load-data
@@ -42,7 +39,8 @@
 
 (defn test-query
   [data q]
-  (binding [memory-event-store/*dal-state* (atom {:aggregate-store data})]
+  (binding [memory-event-store/*event-store* (atom {})
+            view-store-common/*view-store*  (atom {:aggregate-store data})]
     (let [service-name (str/replace (str (uuid/gen)) "-" "_")
           local-ctx (assoc (ctx) :service-name service-name)
           el-ctx (-> local-ctx

@@ -2,9 +2,9 @@
   (:require [jsonista.core :as json]
             [clojure.tools.logging :as log]
             [org.httpkit.client :as http]
-            [clojure.test :refer :all]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [clojure.set :as clojure-set]
             [lambda.aes :as aes])
   (:import (java.time OffsetDateTime)
            (java.time.format DateTimeFormatter)
@@ -42,7 +42,7 @@
                                        (str/starts-with? v "#")
                                        (.writeString jg (str "#" v))
                                        :else (.writeString jg v)))
-                    BufferedReader (fn [^BufferedReader v ^JsonGenerator jg]
+                    BufferedReader (fn [^BufferedReader _v ^JsonGenerator jg]
                                      (.writeString jg "BufferedReader"))
                     UUID           (fn [^UUID v ^JsonGenerator jg]
                                      (.writeString jg (str "#" v)))
@@ -75,49 +75,45 @@
 
 (defn wrap-body [request]
   (cond
-    (:body request) request
     (:form-params request) request
+    (string? request) {:body request}
     :else {:body (to-json request)}))
 
-(defn http-get
+(defn http-request
   [url request & {:keys [raw]}]
-  (let [resp @(http/get url request)]
+  (log/debug url request)
+  (let [resp @(http/request (assoc request
+                                   :url url))]
     (log/debug "Response" resp)
     (if raw
       resp
       (assoc resp
              :body (to-edn (:body resp))))))
+
+(defn http-get
+  [url & {:keys [raw]
+          :or {raw false}}]
+  (http-request url {:method :get} :raw raw))
 
 (defn http-delete
-  [url request & {:keys [raw]}]
-  (let [resp @(http/delete url request)]
-    (log/debug "Response" resp)
-    (if raw
-      resp
-      (assoc resp
-             :body (to-edn (:body resp))))))
+  [url request & {:keys [raw]
+                  :or {raw false}}]
+  (http-request url (assoc request
+                           :method :delete)
+                :raw raw))
 
 (defn http-put
-  [url request & {:keys [raw]}]
+  [url request & {:keys [raw]
+                  :or {raw false}}]
   (log/debug url request)
-  (let [req (wrap-body request)
-        resp @(http/put url req)]
-    (log/debug "Response" resp)
-    (if raw
-      resp
-      (assoc resp
-             :body (to-edn (:body resp))))))
+  (http-request url (assoc (wrap-body request)
+                           :method :put) :raw raw))
 
 (defn http-post
-  [url request & {:keys [raw]}]
-  (log/debug url request)
-  (let [req (wrap-body request)
-        resp @(http/post url req)]
-    (log/debug "Response" resp)
-    (if raw
-      resp
-      (assoc resp
-             :body (to-edn (:body resp))))))
+  [url request & {:keys [raw]
+                  :or {raw false}}]
+  (http-request url (assoc (wrap-body request)
+                           :method :post) :raw raw))
 
 (defn get-env
   [name & [default]]
@@ -145,25 +141,44 @@
                      iv))
       body)))
 
+(defn compatibility->aws-user-pool
+  [config]
+  (if (get-in config [:auth :client-id])
+    (update config
+            :auth (fn [{:keys [client-id
+                               user-pool-id]
+                        :as auth}]
+                    (assoc auth
+                           :iss (str "https://cognito-idp."
+                                     (get-env "Region")
+                                     ".amazonaws.com/"
+                                     user-pool-id)
+                           :aud client-id)))
+    config))
+
 (defn load-config
   [name]
   (log/debug "Loading config name:" name)
   (let [file (io/as-file name)
         classpath (io/as-file
                    (io/resource
-                    name))]
-    (to-edn
-     (if (.exists ^File file)
-       (do
-         (log/debug "Loading from file config:" name)
-         (-> file
-             (slurp)
-             (decrypt name)))
-       (do
-         (log/debug "Loading config from classpath:" name)
-         (-> classpath
-             (slurp)
-             (decrypt name)))))))
+                    name))
+        config (to-edn
+                (if (.exists ^File file)
+                  (do
+                    (log/debug "Loading from file config:" name)
+                    (-> file
+                        (slurp)
+                        (decrypt name)))
+                  (do
+                    (log/debug "Loading config from classpath:" name)
+                    (-> classpath
+                        (slurp)
+                        (decrypt name)))))
+        config (compatibility->aws-user-pool config)
+        env-config (to-edn
+                    (get-env "CustomConfig" "{}"))]
+    (merge config env-config)))
 
 (defn base64encode
   [^String to-encode]
@@ -208,13 +223,14 @@
   [message & expr]
   `(do
      (log/info {:message (str "START " ~message)})
+
      (let [start# (. System (nanoTime))
            mem# (-> (- (.totalMemory (Runtime/getRuntime))
                        (.freeMemory (Runtime/getRuntime)))
                     (/ 1024)
                     (/ 1024)
                     (int))
-           ret# ~@expr]
+           ret# (do ~@expr)]
        (log/info {:type    :time
                   :message (str "END " ~message)
                   :elapsed (/ (double (- (. System (nanoTime)) start#)) 1000000.0)
@@ -225,6 +241,31 @@
                                                 (int)))
                   :unit    "msec"})
        ret#)))
+
+(defn exception->response
+  [e]
+  (let [data (ex-data e)]
+    (if data
+      (if (:exception data)
+        data
+        {:exception data})
+      {:exception (try (.getMessage e)
+                       (catch IllegalArgumentException e
+                         (log/error e)
+                         e))})))
+
+(defn try->data
+  [handler]
+  (try (handler)
+       (catch Exception e
+         (exception->response e))))
+
+(defn try->error
+  [handler]
+  (try (handler)
+       (catch Exception e
+         (clojure-set/rename-keys (exception->response e)
+                                  {:exception :error}))))
 
 (defn fix-keys
   "This is used to represent as close as possible when we store
@@ -239,3 +280,12 @@
   (-> val
       (to-json)
       (to-edn)))
+
+(defn log-startup
+  []
+  (let [startup-milis (Long/parseLong
+                       (str
+                        (get-property "edd.startup-milis" 0)))]
+    (when (not= startup-milis 0)
+      (log/info "Server started: " (- (System/currentTimeMillis)
+                                      startup-milis)))))

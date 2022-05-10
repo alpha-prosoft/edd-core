@@ -33,13 +33,14 @@
         auth (sdk/authorize req)]
 
     (let [response (client/retry-n
-                    #(util/http-post
+                    #(util/http-request
                       (str "https://"
                            (get (:headers req) "Host")
                            (:uri req))
                       (client/request->with-timeouts
                        %
-                       {:body (:payload req)
+                       {:method :post
+                        :body (:payload req)
                         :version :http1.1
                         :headers (-> (:headers req)
                                      (assoc "Authorization" auth)
@@ -56,7 +57,7 @@
         (:body response)))))
 
 (defn delete-message-batch
-  [{:keys [aws] :as ctx} records]
+  [{:keys [aws] :as _ctx} records]
   (log/info (first records))
   (let [queue-arn (get-in (first records) [:eventSourceARN])
         parts (str/split queue-arn #":")
@@ -97,13 +98,14 @@
         auth (sdk/authorize req)]
     (log/info "Dispatching message delete")
     (let [response (client/retry-n
-                    #(util/http-post
+                    #(util/http-request
                       (str "https://"
                            (get (:headers req) "Host")
                            (:uri req))
                       (client/request->with-timeouts
                        %
-                       {:body (:payload req)
+                       {:method :post
+                        :body (:payload req)
                         :version :http1.1
                         :headers (-> (:headers req)
                                      (dissoc "Host")

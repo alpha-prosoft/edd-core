@@ -1,21 +1,23 @@
 (ns edd.view-store.impl.s3.mock
-  (:require [sdk.aws.s3 :as s3]
-            [lambda.util :as util]
+  (:require [lambda.util :as util]
             [edd.ctx :as edd-ctx]
             [clojure.tools.logging :as log]
-            [edd.memory.event-store :as event-store]
+            [edd.view-store.common :as common]
             [lambda.ctx :as lambda-ctx]))
 
 (def implementation :s3-mock)
 
-(def default-store {:aggregate-store []})
+(defn with-init
+  [ctx body-fn]
+  (log/debug "Initializing memory view store")
+  (body-fn ctx))
 
 (defn get-snapshot
   [ctx id & [_version]]
   (log/info "Fetching snapshot aggregate" id)
   (let [realm (edd-ctx/get-realm ctx)
         service-name (lambda-ctx/get-service-name ctx)]
-    (->> @event-store/*dal-state*
+    (->> @(common/get-store)
          :aggregate-store
          (filter
           #(and (= (:realm %) realm)
@@ -31,7 +33,7 @@
   (let [aggregate (util/fix-keys aggregate)
         realm (edd-ctx/get-realm ctx)
         service-name (lambda-ctx/get-service-name ctx)]
-    (swap! event-store/*dal-state*
+    (swap! (common/get-store)
            #(update % :aggregate-store
                     (fn [store]
                       (->> store
@@ -46,25 +48,5 @@
 
   ctx)
 
-(defn with-init
-  [ctx body-fn]
-  (log/debug "Initializing memory view store")
-  (if-not (:global @event-store/*dal-state*)
-    (do
-      (swap! event-store/*dal-state*
-             #(merge
-               default-store
-               (select-keys
-                ctx
-                (keys default-store))
-               %))
-      (body-fn ctx))
-    (binding [event-store/*dal-state* (atom (merge
-                                             default-store
-                                             (util/fix-keys
-                                              (select-keys
-                                               ctx
-                                               (keys default-store)))
-                                             {:global false}))]
-      (body-fn ctx))))
+
 

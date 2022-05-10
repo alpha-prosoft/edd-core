@@ -1,17 +1,14 @@
-(ns lambda.sqs-filter-test
+(ns lambda.sqs-filter-tes
   (:require
    [lambda.util :as util]
-   [aws.lambda :refer [handle-request]]
-   [clojure.string :as str]
-   [lambda.util :refer [to-edn]]
+   [aws.runtime :as runtime]
    [lambda.filters :as fl]
-   [lambda.uuid :as uuid]
-   [clojure.test :refer :all]
    [lambda.util :as util]
-   [lambda.core :as core]
-   [lambda.test.fixture.core :refer [mock-core]]
+   [sdk.aws.sqs :as sqs]
+   [aws.aws :as aws]
+   [clojure.test :refer [deftest testing is]]
+   [lambda.test.fixture.core :refer [mock-core] :as core-mock]
    [lambda.test.fixture.client :refer [verify-traffic-edn]]
-   [clojure.test :refer :all]
    [sdk.aws.common :as common]))
 
 (def interaction-id #uuid "0000b7b5-9f50-4dc4-86d1-2e4fe1f6d491")
@@ -65,7 +62,7 @@
 
 (defn records
   [key]
-  (util/to-json (req key)))
+  (req key))
 
 (defn get-sq-key
   [{:keys [body]}]
@@ -77,61 +74,61 @@
       (:key)))
 
 (deftest queue-cond
-  (let [resp ((:cond fl/from-queue) {:body (req "key")})]
+  (let [resp ((:condition fl/from-queue) {:body (req "key")})]
     (is (= resp true))))
 
 (deftest queue-fn
   (let [resp (get-sq-key
-              ((:fn fl/from-queue) {:body (req "limedocu.txt")}))]
+              ((:handler fl/from-queue) {:body (req "limedocu.txt")} (fn [%] %)))]
     (is (= "limedocu.txt" resp))))
 
 (deftest test-s3-bucket-sqs-request
-  (with-redefs [common/create-date (fn [] "20200426T061823Z")]
-    (let [key (str "test/2021-12-27/"
-                   interaction-id
-                   "/"
-                   request-id
-                   ".limedocu.txt")]
-      (mock-core
-       :invocations [(records key)]
-       :requests [{:get  (str "https://s3.eu-central-1.amazonaws.com/s3-bucket/"
-                              key)
-                   :body (char-array "Of something")}]
-       (core/start
-        {}
-        (fn [ctx body]
-          "Slurp content of S3 request into response"
-          (let [commands (:commands body)
-                cmd (first commands)
-                response (assoc cmd :body
-                                (slurp (:body cmd)))]
-            (assoc body :commands [response])))
-        :filters [fl/from-queue fl/from-bucket])
-       (verify-traffic-edn [{:body   {:commands       [{:body   "Of something"
-                                                        :cmd-id :object-uploaded
-                                                        :date   "2021-12-27"
-                                                        :id     request-id
-                                                        :bucket "s3-bucket"
-                                                        :key    key}]
-                                      :meta           {:realm :test
-                                                       :user  {:email "non-interractiva@s3.amazonws.com"
-                                                               :id    #uuid "1111b7b5-9f50-4dc4-86d1-2e4fe1f6d491"
-                                                               :role  :non-interactive}}
-                                      :user           "local-test"
-                                      :interaction-id interaction-id
-                                      :request-id     request-id}
-                             :method :post
-                             :url    "http://mock/2018-06-01/runtime/invocation/0/response"}
-                            {:as              :stream
-                             :connect-timeout 300
-                             :headers         {"Authorization"        "AWS4-HMAC-SHA256 Credential=/20200426/eu-central-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=4228a5c1f0c90c90944df7658346fc5f2f0a3e365f7352b24991c6f1be6863d0"
-                                               "x-amz-content-sha256" "UNSIGNED-PAYLOAD"
-                                               "x-amz-date"           "20200426T061823Z"
-                                               "x-amz-security-token" nil}
-                             :idle-timeout    5000
-                             :method          :get
-                             :url             "https://s3.eu-central-1.amazonaws.com/s3-bucket/test/2021-12-27/0000b7b5-9f50-4dc4-86d1-2e4fe1f6d491/1111b7b5-9f50-4dc4-86d1-2e4fe1f6d491.limedocu.txt"}
-
-                            {:method  :get
-                             :timeout 90000000
-                             :url     "http://mock/2018-06-01/runtime/invocation/next"}])))))
+  (testing
+   "S3 Requests can be forwarded to SQS queue and then they are double wrapped"
+    (with-redefs [common/create-date (fn [] "20200426T061823Z")
+                  aws/enqueue-response (fn [_ctx _msg])
+                  sqs/delete-message-batch (fn [_ctx _msg])]
+      (let [key (str "test/2021-12-27/"
+                     interaction-id
+                     "/"
+                     request-id
+                     ".limedocu.txt")]
+        (mock-core
+         {:responses [{:method :get
+                       :url (str "https://s3.eu-central-1.amazonaws.com/s3-bucket/"
+                                 key)
+                       :response {:body (char-array "Of something")}}]}
+         (runtime/lambda-requests
+          core-mock/ctx
+          (fn [_ctx body]
+            (let [commands (:commands body)
+                  cmd (first commands)
+                  response (assoc cmd :body
+                                  (slurp (:body cmd)))]
+              (assoc body :commands [response])))
+          [(records key)]
+          :filters [fl/from-queue fl/from-bucket])
+         (verify-traffic-edn [{:body   {:commands       [{:body   "Of something"
+                                                          :cmd-id :object-uploaded
+                                                          :date   "2021-12-27"
+                                                          :id     request-id
+                                                          :bucket "s3-bucket"
+                                                          :key    key}]
+                                        :meta           {:realm :test
+                                                         :user  {:email "non-interractiva@s3.amazonws.com"
+                                                                 :id    #uuid "1111b7b5-9f50-4dc4-86d1-2e4fe1f6d491"
+                                                                 :role  :non-interactive}}
+                                        :user           "local-svc"
+                                        :interaction-id interaction-id
+                                        :request-id     request-id}
+                               :method :post
+                               :url    core-mock/response-endpoint-o}
+                              {:as              :stream
+                               :connect-timeout 300
+                               :headers         {"Authorization"        "AWS4-HMAC-SHA256 Credential=/20200426/eu-central-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=4228a5c1f0c90c90944df7658346fc5f2f0a3e365f7352b24991c6f1be6863d0"
+                                                 "x-amz-content-sha256" "UNSIGNED-PAYLOAD"
+                                                 "x-amz-date"           "20200426T061823Z"
+                                                 "x-amz-security-token" nil}
+                               :idle-timeout    5000
+                               :method          :get
+                               :url             "https://s3.eu-central-1.amazonaws.com/s3-bucket/test/2021-12-27/0000b7b5-9f50-4dc4-86d1-2e4fe1f6d491/1111b7b5-9f50-4dc4-86d1-2e4fe1f6d491.limedocu.txt"}]))))))

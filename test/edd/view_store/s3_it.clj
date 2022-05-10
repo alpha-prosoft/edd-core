@@ -1,30 +1,29 @@
 (ns edd.view-store.s3-it
-  (:require [clojure.test :refer :all]
-            [lambda.util :as util]
+  (:require [clojure.test :refer [deftest is]]
             [edd.view-store.common :as common-view-store]
             [edd.view-store.s3 :as s3-view-store]
             [edd.test.fixture.dal :as mock]
             [edd.core :as edd]
             [edd.memory.event-store :as memory-event-store]
             [lambda.uuid :as uuid]
-            [edd.ctx :as edd-ctx]
-            [runtime.aws :as runtime-aws]
             [lambda.ctx :as lambda-ctx]
+            [edd.ctx :as edd-ctx]
+            [aws.ctx :as aws-context]
             [clojure.tools.logging :as log]))
 
 (defn get-main-ctx
   [ctx]
   (-> ctx
-      (assoc :http-mock {:ignore-missing false})
+      (lambda-ctx/init)
       (s3-view-store/register :config {:aggregate-store-bucket
                                        "test-it"})
       (memory-event-store/register)
-      (runtime-aws/init)))
+      (aws-context/init)))
 
 (defn get-mock-ctx
   [ctx]
   (-> ctx
-      (assoc :http-mock {:ignore-missing false})
+      (lambda-ctx/init)
       (s3-view-store/register :implementation :mock)
       (memory-event-store/register)))
 
@@ -41,13 +40,12 @@
 
     (doseq [ctx [main-ctx mock-ctx]]
       (mock/with-mock-dal
-        ctx
         (log/info "Testing: " (get-in ctx [:view-store :type]))
         (mock/apply-cmd ctx {:cmd-id :cmd-1
                              :id     agg-id
                              :name   "Test1"})
-        (is (= {:id      agg-id
-                :name    "Test1"
+        (is (= {:name "Test1",
+                :id agg-id
                 :version 1}
                (common-view-store/get-snapshot ctx agg-id)))))))
 
@@ -61,9 +59,31 @@
         main-ctx (get-main-ctx base-ctx)
         mock-ctx (get-mock-ctx base-ctx)]
 
-    (doseq [ctx [main-ctx mock-ctx]]
+    (let [ctx main-ctx]
       (mock/with-mock-dal
-        (edd-ctx/set-realm ctx :realm2)
+        (let [agg-id (uuid/gen)
+              ctx1 (edd-ctx/set-realm ctx :realm1)
+              ctx2 (edd-ctx/set-realm ctx :realm2)]
+
+          (mock/apply-cmd ctx1
+                          {:cmd-id :cmd-1
+                           :id     agg-id
+                           :name   "Test1"})
+          (mock/apply-cmd ctx2
+                          {:cmd-id :cmd-1
+                           :id     agg-id
+                           :name   "Test2"})
+
+          (is (= {:id      agg-id
+                  :name    "Test1"
+                  :version 1}
+                 (common-view-store/get-snapshot ctx1 agg-id)))
+          (is (= {:id      agg-id
+                  :name    "Test2"
+                  :version 2}
+                 (common-view-store/get-snapshot ctx2 agg-id))))))
+    (let [ctx mock-ctx]
+      (mock/with-mock-dal
         (let [agg-id (uuid/gen)
               ctx1 (edd-ctx/set-realm ctx :realm1)
               ctx2 (edd-ctx/set-realm ctx :realm2)]
@@ -96,9 +116,8 @@
         main-ctx (get-main-ctx base-ctx)
         mock-ctx (get-mock-ctx base-ctx)]
 
-    (doseq [ctx [main-ctx mock-ctx]]
+    (doseq [ctx [main-ctx]]
       (mock/with-mock-dal
-        (edd-ctx/set-realm ctx :realm2)
         (let [agg-id (uuid/gen)
               ctx (-> ctx
                       (edd/reg-cmd :cmd-1 (fn [_ctx cmd]
@@ -106,8 +125,8 @@
                                              :name     (:name cmd)}))
                       (edd/reg-event :event-1 (fn [agg evt]
                                                 (assoc agg :name (:name evt)))))
-              ctx1 (lambda-ctx/update-service-name ctx :svc1)
-              ctx2 (lambda-ctx/update-service-name ctx :svc2)]
+              ctx1 (assoc ctx :service-name :svc1)
+              ctx2 (assoc ctx :service-name :svc2)]
 
           (mock/apply-cmd ctx1
                           {:cmd-id :cmd-1

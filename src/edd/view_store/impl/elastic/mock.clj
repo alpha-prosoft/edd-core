@@ -1,14 +1,15 @@
 (ns edd.view-store.impl.elastic.mock
   (:require [edd.view-store.impl.elastic.mock-search :as mock-search]
-            [edd.memory.event-store :as event-store]
             [lambda.util :as util]
             [clojure.data :as clojure-data]
+            [edd.view-store.common :as common]
             [clojure.tools.logging :as log]))
 
 (def implementation :elastic-mock)
 
 (defn with-init
   [ctx body-fn]
+  (log/debug "Initializing memory view store")
   (body-fn ctx))
 
 (defn fix-keys
@@ -31,7 +32,7 @@
          #(filter-aggregate
            (dissoc query :query-id)
            %)
-         (->> @event-store/*dal-state*
+         (->> @(common/get-store)
               (:aggregate-store)))))
 
 (defn update-aggregate-impl
@@ -39,7 +40,7 @@
   {:pre [aggregate]}
   (log/info "Emulated 'update-aggregate' dal function")
   (let [aggregate (fix-keys aggregate)]
-    (swap! event-store/*dal-state*
+    (swap! (common/get-store)
            #(update % :aggregate-store
                     (fn [v]
                       (->> v
@@ -59,32 +60,10 @@
   [ctx query]
   (mock-search/advanced-search-impl ctx query))
 
-(defn with-init
-  [ctx body-fn]
-  (log/debug "Initializing memory view store")
-  (if-not (:global @event-store/*dal-state*)
-    (do
-      (swap! event-store/*dal-state*
-             #(merge
-               mock-search/default-elastic-store
-               (select-keys
-                ctx
-                (keys mock-search/default-elastic-store))
-               %))
-      (body-fn ctx))
-    (binding [event-store/*dal-state* (atom (merge
-                                             mock-search/default-elastic-store
-                                             (util/fix-keys
-                                              (select-keys
-                                               ctx
-                                               (keys mock-search/default-elastic-store)))
-                                             {:global false}))]
-      (body-fn ctx))))
-
 (defn get-snapshot
   [_ctx id]
   (log/info "Fetching snapshot aggregate" id)
-  (->> @event-store/*dal-state*
+  (->> @(common/get-store)
        (:aggregate-store)
        (filter
         #(= (:id %) id))

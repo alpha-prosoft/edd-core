@@ -1,6 +1,6 @@
 (ns lambda.request)
 
-(def ^:dynamic *request* (atom {}))
+(def ^:dynamic *request*)
 
 (defn is-scoped
   "Used for example when there is multiple realms or

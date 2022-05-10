@@ -190,3 +190,35 @@ data. This can be usefull from frontend to send to all backend services in distr
 We will use it also for Blue/Green testing of our services. For example our UI tests will send to all requests made to
 backend field which service is being tests. Then our router service will be able to route all requests correctly. More
 information about blue green deployment in following sections. 
+
+## Runtime 
+
+Runtime is entry point to your service/application. Job of runtime is to accept events and provide responses. Runtimes are usually not pure and are specific to environment. 
+
+Every runtime needs to invoke lambda.core/handle-request function with context (Map) as first argument. Required keys of context are are 
+:incocation-id as UUID to inficate invocation being handleed. 
+
+Second parameter is body which contains entire request as map. 
+
+:handler which is function that is handling request. Handler receives 2 parameters (context and request after filters)
+
+:filters is list of function that will be applied to original request before invoking handler 
+ 
+:send-response is function that will be invoked to distribute response to runtime. 
+
+
+```
+   (core/handle-request
+                (-> ctx
+                    (assoc :request request
+                           :invocation-id
+                           (-> request
+                               :invocation-id)))
+                body
+                :handler handler
+                :filters filters
+                :send-response send-response)
+```
+
+Example of implemneted filters are in lambda.core.filters ns. 
+

@@ -1,6 +1,6 @@
 (ns lambda.http-client
   (:require [clojure.tools.logging :as log]
-            [edd.util :as edd-util]))
+            [lambda.util :as util]))
 
 (def retry-count 5)
 (defn request->with-timeouts
@@ -38,7 +38,7 @@
     (let [response (try
                      (apply f [attempt])
                      (catch Exception e
-                       (edd-util/try-parse-exception-data e)))]
+                       (util/try->error e)))]
       (if (:error response)
         (do
           (log/warn (str "Retrying " (- total attempt) "/" total) (:error response))

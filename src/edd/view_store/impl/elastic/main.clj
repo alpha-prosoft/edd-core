@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [lambda.util :as util]
+            [edd.ctx :as edd-ctx]
             [edd.view-store.impl.elastic.common :as common]
             [lambda.elastic :as el]))
 
@@ -13,7 +14,7 @@
 
 (defn realm
   [ctx]
-  (name (get-in ctx [:meta :realm] :no_realm)))
+  (name (edd-ctx/get-realm ctx)))
 
 (defn- make-index-name
   [realm-name service-name]

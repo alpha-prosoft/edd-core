@@ -1,4 +1,4 @@
-(ns runtime.aws
+(ns aws.ctx
   (:require [lambda.util :as util]
             [malli.core :as m]
             [malli.error :as me]))
@@ -14,7 +14,8 @@
 
 (defn init
   [ctx]
-  (let [aws (merge {:region                (util/get-env "Region" "local")
+  (let [aws (merge {:region                (util/get-env "Region"
+                                                         (util/get-env "AWS_DEFAULT_REGION" "local"))
                     :account-id            (util/get-env "AccountId" "local")
                     :aws-access-key-id     (util/get-env "AWS_ACCESS_KEY_ID" "")
                     :aws-secret-access-key (util/get-env "AWS_SECRET_ACCESS_KEY" "")

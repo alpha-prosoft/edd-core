@@ -10,21 +10,19 @@
            (com.auth0.jwt.exceptions SignatureVerificationException)))
 
 (defn validate-token-attributes
-  [{{region :region}                                  :env
-    {user-pool-id :user-pool-id client-id :client-id} :auth} token]
+  [{{iss :iss aud :aud} :auth} token]
   (-> {:jwk       :valid
        :signature :valid}
-      (assoc :aud (if (= (:aud token)
-                         client-id)
+      (assoc :aud (if (= (:aud token) aud)
                     :valid
-                    :invalid))
-      (assoc :iss (if (= (:iss token)
-                         (str "https://cognito-idp."
-                              region
-                              ".amazonaws.com/"
-                              user-pool-id))
+                    {:result :invalid
+                     :actual (:aud token)
+                     :expected aud}))
+      (assoc :iss (if (= (:iss token) iss)
                     :valid
-                    :invalid))
+                    {:result :invalid
+                     :actual (:iss token)
+                     :expected iss}))
       (assoc :exp (if (> (:exp token)
                          (util/get-current-time-ms))
                     :valid
@@ -32,12 +30,9 @@
 
 (defn fetch-jwks-keys
   [ctx]
-  (let [region (util/get-env "Region")
-        jwks-json (util/load-config "jwks.json")]
+  (let [jwks-json (util/load-config "jwks.json")]
     (log/debug "Initializing JWKS" (get jwks-json :keys))
-    (-> ctx
-        (assoc :jwks-all (get jwks-json :keys))
-        (assoc-in [:env :region] region))))
+    (assoc ctx :jwks-all (get jwks-json :keys))))
 
 (defn parse-token
   [{:keys [jwks-all] :as ctx} token]
@@ -62,7 +57,7 @@
                          :aud (.get (.getAudience jwt) 0)
                          :exp (.getTime
                                (.getExpiresAt jwt))})
-                  [invalid] (filter (fn [[_ v]] (= v :invalid)) resp)]
+                  [invalid] (filter (fn [[_ v]] (not= v :valid)) resp)]
               (if-not invalid
                 claims
                 (do

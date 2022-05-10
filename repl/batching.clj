@@ -20,14 +20,13 @@
 (def ctx
   (-> mock/ctx
       (assoc :service-name :local-test)
-      (edd/reg-cmd :inc
-                   (fn [ctx cmd]
-                     {:event-id :inced
-                      :value     (inc (get-in ctx [:counter :value] 0))})
-                   :dps {:counter
-                         (fn [cmd]
-                           {:query-id :get-by-id
-                            :id       (:id cmd)})})
+      (edd/reg-cmd :inc (fn [ctx _cmd]
+                          {:event-id :inced
+                           :value     (inc (get-in ctx [:counter :value] 0))})
+                   :deps {:counter
+                          (fn [ctx cmd]
+                            {:query-id :get-by-id
+                             :id       (:id cmd)})})
 
       (edd/reg-query :get-by-id common/get-by-id)
       (edd/reg-event :inced (fn [ctx event]

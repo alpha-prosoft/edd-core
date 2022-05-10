@@ -1,7 +1,6 @@
 (ns edd.view-store.elastic
   (:require [lambda.util :as util]
             [malli.core :as m]
-            [malli.error :as me]
             [edd.view-store.common :as common]
             [edd.view-store.common :refer [get-snapshot
                                            update-snapshot

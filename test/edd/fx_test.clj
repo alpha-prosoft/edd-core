@@ -1,11 +1,9 @@
 (ns edd.fx-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest testing is]]
             [edd.core :as edd]
             [edd.el.cmd :as cmd]
             [edd.test.fixture.dal :as mock]
             [lambda.uuid :as uuid]))
-
-(use 'clojure.test)
 
 (deftest test-meta-fx
   (let [request-id (uuid/gen)
@@ -13,7 +11,7 @@
         ctx (-> {:request-id     request-id
                  :interaction-id interaction-id}
                 (edd.core/reg-fx
-                 (fn [ctx events]
+                 (fn [_ctx _events]
                    [{:service  "test-svc"
                      :commands {:id     "1"
                                 :cmd-id "2"}}
@@ -39,7 +37,7 @@
 (def ctx
   (-> {}
       (edd.core/reg-fx
-       (fn [ctx events]
+       (fn [_ctx _events]
          {:service  "test-svc"
           :commands {:id     "1"
                      :cmd-id "2"}}))))
@@ -52,7 +50,7 @@
 (def ctx2
   (-> {}
       (edd.core/reg-fx
-       (fn [ctx events]
+       (fn [_ctx _events]
          [{:service  "test-svc"
            :commands {:id     "1"
                       :cmd-id "2"}}]))))
@@ -67,13 +65,13 @@
 
 (def ctx3
   (-> mock/ctx
-      (merge {:service-name "source-svc"})
+      (merge {:service-name :local-svc})
       (edd.core/reg-cmd
        :cmd-1
-       (fn [ctx cmd]
+       (fn [_ctx _cmd]
          {:event-id :e1}))
       (edd.core/reg-fx
-       (fn [ctx events]
+       (fn [_ctx _events]
          [{:id     "2"
            :cmd-id "2"}
           {:service  "target-svc"
@@ -86,7 +84,7 @@
     (mock/handle-cmd ctx3 {:id     cmd-id
                            :cmd-id :cmd-1})
     (mock/verify-state :command-store
-                       [{:service  "source-svc"
+                       [{:service  :local-svc
                          :commands [{:id     "2"
                                      :cmd-id "2"}]
                          :meta     {}}
@@ -97,14 +95,14 @@
 
 (deftest test-fx-evt
   (let [ctxevt (-> mock/ctx
-                   (merge {:service-name "source-svc"})
+                   (merge {:service-name :local-svc})
                    (edd.core/reg-cmd
                     :cmd-1
                     (fn [ctx cmd]
                       [{:event-id :e1}
                        {:event-id :e2}]))
                    (edd.core/reg-event-fx
-                    :e1 (fn [ctx events]
+                    :e1 (fn [_ctx _events]
                           [{:id     "2"
                             :cmd-id "2"}])))]
     (testing "If one handler works"
@@ -113,7 +111,7 @@
         (mock/handle-cmd ctxevt {:id     cmd-id
                                  :cmd-id :cmd-1})
         (mock/verify-state :command-store
-                           [{:service  "source-svc"
+                           [{:service  :local-svc
                              :commands [{:id     "2"
                                          :cmd-id "2"}]
                              :meta     {}}])))
@@ -122,14 +120,14 @@
         ctxevt
         (mock/handle-cmd (edd.core/reg-event-fx
                           ctxevt
-                          :e2 (fn [ctx event]
+                          :e2 (fn [_ctx _event]
                                 {:service  "target-svc"
                                  :commands [{:id     "1"
                                              :cmd-id "1"}]}))
                          {:id     cmd-id
                           :cmd-id :cmd-1})
         (mock/verify-state :command-store
-                           [{:service  "source-svc"
+                           [{:service  :local-svc
                              :commands [{:id     "2"
                                          :cmd-id "2"}]
                              :meta     {}}
@@ -141,25 +139,28 @@
 (deftest test-execute-fx
   (let [ctx (-> mock/ctx
                 (edd.core/reg-cmd :cmd-1
-                                  (fn [ctx cmd]
+                                  (fn [_ctx _cmd]
                                     {:event-id :cmd-1-event}))
                 (edd.core/reg-fx
-                 (fn [ctx events]
+                 (fn [_ctx _events]
                    [{:service  :some-other-svc
                      :commands [{:id     cmd-id
                                  :cmd-id :non-existing-cmd}]}])))]
     (mock/with-mock-dal
       ctx
       (is (= true
-             (:success (mock/handle-cmd ctx {:id     cmd-id
-                                             :cmd-id :cmd-1}))))
+             (get-in (mock/handle-cmd ctx {:id     cmd-id
+                                           :cmd-id :cmd-1})
+                     [:result :success])))
       (mock/execute-fx ctx)
       (mock/execute-fx ctx))
+
     (mock/with-mock-dal
       ctx
       (is (= true
-             (:success (mock/handle-cmd ctx {:id     cmd-id
-                                             :cmd-id :cmd-1}))))
+             (get-in (mock/handle-cmd ctx {:id     cmd-id
+                                           :cmd-id :cmd-1})
+                     [:result :success])))
       (doseq [cmd (mock/peek-state :command-store)]
         (is (= nil
                (mock/handle-cmd ctx cmd))))

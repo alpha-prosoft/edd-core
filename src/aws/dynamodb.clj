@@ -22,9 +22,10 @@
         auth (common/authorize req)]
 
     (let [response (common/retry
-                    #(util/http-post
+                    #(util/http-request
                       (str "https://" (get (:headers req) "Host") "/")
-                      {:body    (:payload req)
+                      {:method :post
+                       :body    (:payload req)
                        :headers (-> (:headers req)
                                     (dissoc "Host")
                                     (assoc "Authorization" auth))

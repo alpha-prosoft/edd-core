@@ -58,14 +58,17 @@
   (binding [util/*cache* (atom {})]
     (with-redefs [common/create-date (fn [] "20200504T080055Z")]
       (client/mock-http
-       [{:post "https://cognito-idp.eu-central-1.amazonaws.com"
-         :status 200
-         :body (util/to-json user-response)}]
+       {}
+       [{:method :post
+         :url "https://cognito-idp.eu-central-1.amazonaws.com"
+         :response {:status 200
+                    :body (util/to-json user-response)}}]
        (is (= user-response
               (cognito-idp/admin-get-user
                ctx
                {:username "PingFederate_robert.pofuk@rbinternational.com"})))
-       (client/verify-traffic [login-request])))))
+       (is (= [login-request]
+              (client/traffic)))))))
 
 (def user-groups-request
   {:body "{\"Username\":\"PingFederate_robert.pofuk@rbinternational.com\",\"UserPoolId\":\"eu-central-1_ACXYul00Q\",\"Limit\":60}"
@@ -105,9 +108,11 @@
   (binding [util/*cache* (atom {})]
     (with-redefs [common/create-date (fn [] "20200504T080055Z")]
       (client/mock-http
-       [{:post "https://cognito-idp.eu-central-1.amazonaws.com"
-         :status 200
-         :body (util/to-json user-groups-response)}]
+       {}
+       [{:method :post
+         :url "https://cognito-idp.eu-central-1.amazonaws.com"
+         :response {:status 200
+                    :body (util/to-json user-groups-response)}}]
        (is (= user-groups-response
               (cognito-idp/admin-list-groups-for-user
                ctx

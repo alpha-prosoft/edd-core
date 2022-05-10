@@ -1,14 +1,10 @@
 (ns edd.snapshot-test
-  (:require [clojure.test :refer :all]
-            [lambda.util :as util]
+  (:require [clojure.test :refer [deftest testing is]]
             [lambda.uuid :as uuid]
-            [edd.el.event :as event]
-
             [edd.core :as edd]
             [edd.test.fixture.dal :as mock]
             [edd.memory.event-store :as event-store]
-            [edd.view-store.elastic :as view-store]
-            [edd.dal :as dal]))
+            [edd.view-store.elastic :as view-store]))
 
 (def agg-id (uuid/gen))
 
@@ -18,7 +14,7 @@
       (event-store/register)
       (view-store/register :implementation :mock)
       (edd/reg-event :event-1
-                     (fn [agg event]
+                     (fn [agg _event]
                        (update agg :value (fnil inc 0))))))
 
 (deftest apply-events-no-snapshot
@@ -28,7 +24,7 @@
              :event-store [{:event-id  :event-1
                             :event-seq 1
                             :id        agg-id}])
-      (event/handle-event (assoc-in ctx [:apply :aggregate-id] agg-id))
+      (mock/handle-event ctx (assoc-in {} [:apply :aggregate-id] agg-id))
       (mock/verify-state :aggregate-store
                          [{:id      agg-id
                            :version 1
@@ -41,7 +37,7 @@
              :aggregate-store [{:id      agg-id
                                 :value   2
                                 :version 2}])
-      (let [resp (event/handle-event (assoc-in ctx [:apply :aggregate-id] agg-id))]
+      (let [resp (mock/handle-event ctx (assoc-in {} [:apply :aggregate-id] agg-id))]
         (prn resp)
         (mock/verify-state :aggregate-store
                            [{:id      agg-id
@@ -58,7 +54,7 @@
              :aggregate-store [{:id      agg-id
                                 :value   1
                                 :version 2}])
-      (let [resp (event/handle-event (assoc-in ctx [:apply :aggregate-id] agg-id))]
+      (let [_resp (mock/handle-event ctx (assoc-in {} [:apply :aggregate-id] agg-id))]
         (mock/verify-state :aggregate-store
                            [{:id      agg-id
                              :version 3
@@ -74,7 +70,7 @@
              :aggregate-store [{:id      agg-id
                                 :value   1
                                 :version 3}])
-      (let [resp (event/handle-event (assoc-in ctx [:apply :aggregate-id] agg-id))]
+      (let [_resp (mock/handle-event ctx (assoc-in {} [:apply :aggregate-id] agg-id))]
         (mock/verify-state :aggregate-store
                            [{:id      agg-id
                              :version 3

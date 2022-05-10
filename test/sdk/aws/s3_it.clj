@@ -2,9 +2,10 @@
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.tools.logging :as log]
             [sdk.aws.s3 :as s3]
+            [aws.ctx :as aws-ctx]
+            [lambda.ctx :as lambda-ctx]
             [lambda.uuid :as uuid]
-            [lambda.util :as util]
-            [aws.lambda :as lambda]))
+            [lambda.util :as util]))
 
 (defn for-object
   [key]
@@ -36,15 +37,9 @@
     key))
 
 (deftest test-s3-upload
-  (let [ctx    {:aws (lambda/fetch-aws-config)
-                :service-name (keyword (util/get-env
-                                        "ServiceName"
-                                        "local-test"))
-                :hosted-zone-name (util/get-env
-                                   "PublicHostedZoneNetme"
-                                   "example.com")
-                :environment-name-lower (util/get-env
-                                         "EnvironmentNameLower")}]
+  (let [ctx    (-> {}
+                   aws-ctx/init
+                   aws-ctx/init)]
     (testing "Testing happy path of put and get object"
       (let [key (gen-key)
             data "sample-data"]
@@ -56,25 +51,21 @@
     (testing "Delete getting missing object"
       (let [key (gen-key)
             object (for-object key)]
-        (is (= 404
-               (try
-                 (s3/get-object ctx object)
-                 (catch Exception e
-                   (-> (ex-data e)
-                       (get-in [:error :error :status]))))))))
+        (is (= nil
+               (s3/get-object ctx object)))))
 
     (testing "Testing when there is error putting object to s3"
       (let [key (gen-key)
             data "sample-data"
             atempt (atom 0)
-            original-function util/http-put]
-        (with-redefs [util/http-put (fn [url request & {:keys [raw]}]
-                                      (log/info "Attempt: " @atempt)
-                                      (swap! atempt inc)
-                                      (if (< @atempt 2)
-                                        {:body (char-array data)
-                                         :status 503}
-                                        (original-function url request :raw raw)))]
+            original-function util/http-request]
+        (with-redefs [util/http-request (fn [url request & {:keys [raw]}]
+                                          (log/info "Attempt: " @atempt)
+                                          (swap! atempt inc)
+                                          (if (< @atempt 2)
+                                            {:body (char-array data)
+                                             :status 503}
+                                            (original-function url request :raw raw)))]
           (s3/put-object ctx (for-object-with-content key data)))
         (is (= 2
                @atempt))
@@ -86,14 +77,16 @@
       (let [key (gen-key)
             data "sample-data"
             atempt (atom 0)
-            original-function util/http-get]
-        (with-redefs [util/http-get (fn [url request & {:keys [raw]}]
-                                      (log/info "Attempt: " @atempt)
-                                      (swap! atempt inc)
-                                      (if (< @atempt 2)
-                                        {:body (char-array data)
-                                         :status 503}
-                                        (original-function url request :raw raw)))]
+            original-function util/http-request]
+        (with-redefs [util/http-request (fn [url request & {:keys [raw]}]
+                                          (log/info "Attempt: " @atempt)
+                                          (when (= (:method request)
+                                                   :put)
+                                            (swap! atempt inc))
+                                          (if (< @atempt 2)
+                                            {:body (char-array data)
+                                             :status 503}
+                                            (original-function url request :raw raw)))]
           (s3/put-object ctx (for-object-with-content key data))
           (let [resp (s3/get-object ctx (for-object-with-content key "sample-data"))]
             (is (= 2
@@ -102,15 +95,9 @@
                    (slurp resp)))))))))
 
 (deftest test-s3-tagging
-  (let [ctx    {:aws (lambda/fetch-aws-config)
-                :service-name (keyword (util/get-env
-                                        "ServiceName"
-                                        "local-test"))
-                :hosted-zone-name (util/get-env
-                                   "PublicHostedZoneNetme"
-                                   "example.com")
-                :environment-name-lower (util/get-env
-                                         "EnvironmentNameLower")}]
+  (let [ctx    (-> {}
+                   lambda-ctx/init
+                   aws-ctx/init)]
     (testing "Testing happy path of put and get object tags"
       (let [key (gen-key)
             data "sample-data"
@@ -127,12 +114,8 @@
     (testing "Delete getting missing tagged"
       (let [key (gen-key)
             object (for-object key)]
-        (is (= 404
-               (try
-                 (s3/get-object-tagging ctx object)
-                 (catch Exception e
-                   (-> (ex-data e)
-                       (get-in [:error :error :status]))))))))
+        (is (= nil
+               (s3/get-object-tagging ctx object)))))
 
     (testing "Testing when there is error putting tags"
       (let [key (gen-key)
@@ -141,16 +124,16 @@
             tags [{:key "testkey"
                    :value "testvalue"}]
             atempt (atom 0)
-            original-function util/http-put]
+            original-function util/http-request]
 
         (s3/put-object ctx (assoc-in object [:s3 :object :content] data))
-        (with-redefs [util/http-put (fn [url request & {:keys [raw]}]
-                                      (log/info "Attempt: " @atempt)
-                                      (swap! atempt inc)
-                                      (if (< @atempt 2)
-                                        {:body (char-array data)
-                                         :status 503}
-                                        (original-function url request :raw raw)))]
+        (with-redefs [util/http-request (fn [url request & {:keys [raw]}]
+                                          (log/info "Attempt: " @atempt)
+                                          (swap! atempt inc)
+                                          (if (< @atempt 2)
+                                            {:body (char-array data)
+                                             :status 503}
+                                            (original-function url request :raw raw)))]
           (s3/put-object-tagging ctx {:object object
                                       :tags tags})
           (is (= 2
@@ -165,18 +148,18 @@
             tags [{:key "testkey"
                    :value "testvalue"}]
             atempt (atom 0)
-            original-function util/http-get]
+            original-function util/http-request]
 
         (s3/put-object ctx (assoc-in object [:s3 :object :content] data))
         (s3/put-object-tagging ctx {:object object
                                     :tags tags})
-        (with-redefs [util/http-get (fn [url request & {:keys [raw]}]
-                                      (log/info "Attempt: " @atempt)
-                                      (swap! atempt inc)
-                                      (if (< @atempt 2)
-                                        {:body (char-array data)
-                                         :status 503}
-                                        (original-function url request :raw raw)))]
+        (with-redefs [util/http-request (fn [url request & {:keys [raw]}]
+                                          (log/info "Attempt: " @atempt)
+                                          (swap! atempt inc)
+                                          (if (< @atempt 2)
+                                            {:body (char-array data)
+                                             :status 503}
+                                            (original-function url request :raw raw)))]
 
           (let [response (s3/get-object-tagging ctx object)]
             (is (= 2
@@ -185,15 +168,9 @@
                    response))))))))
 
 (deftest test-s3-delete
-  (let [ctx    {:aws (lambda/fetch-aws-config)
-                :service-name (keyword (util/get-env
-                                        "ServiceName"
-                                        "local-test"))
-                :hosted-zone-name (util/get-env
-                                   "PublicHostedZoneNetme"
-                                   "example.com")
-                :environment-name-lower (util/get-env
-                                         "EnvironmentNameLower")}]
+  (let [ctx    (-> {}
+                   lambda-ctx/init
+                   aws-ctx/init)]
     (testing "Testing happy path of put and delete"
       (let [key (gen-key)
             data "sample-data"
@@ -203,47 +180,35 @@
         (is (= data
                (slurp (s3/get-object ctx object))))
         (s3/delete-object ctx object)
-        (is (= 404
-               (try
-                 (s3/get-object ctx object)
-                 (catch Exception e
-                   (-> (ex-data e)
-                       (get-in [:error :error :status]))))))))
+        (is (= nil
+               (s3/get-object ctx object)))))
 
     (testing "Delete missing object"
       (let [key (gen-key)
             object (for-object key)]
-        (is (= 404
-               (try
-                 (s3/get-object ctx object)
-                 (catch Exception e
-                   (-> (ex-data e)
-                       (get-in [:error :error :status]))))))))
+        (is (= nil
+               (s3/get-object ctx object)))))
 
     (testing "Testing when there is error deleteing"
       (let [key (gen-key)
             data "sample-data"
             object (for-object key)
             atempt (atom 0)
-            original-function util/http-delete]
+            original-function util/http-request]
 
         (s3/put-object ctx (assoc-in object [:s3 :object :content] data))
         (is (= data
                (slurp (s3/get-object ctx object))))
-        (with-redefs [util/http-delete (fn [url request & {:keys [raw]}]
-                                         (log/info "Attempt: " @atempt)
-                                         (swap! atempt inc)
-                                         (if (< @atempt 2)
-                                           {:body (char-array data)
-                                            :status 503}
-                                           (original-function url request :raw raw)))]
+        (with-redefs [util/http-request (fn [url request & {:keys [raw]}]
+                                          (log/info "Attempt: " @atempt)
+                                          (swap! atempt inc)
+                                          (if (< @atempt 2)
+                                            {:body (char-array data)
+                                             :status 503}
+                                            (original-function url request :raw raw)))]
           (s3/delete-object ctx object)
           (is (= 2
                  @atempt))
-          (is (= 404
-                 (try
-                   (s3/get-object ctx object)
-                   (catch Exception e
-                     (-> (ex-data e)
-                         (get-in [:error :error :status])))))))))))
+          (is (= nil
+                 (s3/get-object ctx object))))))))
 

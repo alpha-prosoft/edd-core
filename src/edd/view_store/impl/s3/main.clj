@@ -6,12 +6,17 @@
 
 (def implementation :s3-main)
 
+(defn with-init
+  [ctx body-fn]
+  (body-fn ctx))
+
 (defn get-key
   [ctx id]
   (str "aggregates/"
-       (lambda-ctx/get-service-name ctx)
+       (name
+        (lambda-ctx/get-service-name ctx))
        "/"
-       (str
+       (name
         (edd-ctx/get-realm ctx))
        "/"
        id
@@ -25,10 +30,10 @@
                              (get-key ctx id)))
         {:keys [error] :as resp} (s3/get-object ctx object)]
     (cond
+      (= resp nil) nil
       (not error) (-> resp
                       (slurp)
                       (util/to-edn))
-      (= (:status error) 404) nil
       :else (throw (ex-info "Error getting snapshot"
                             {:error  error
                              :object object})))))
@@ -50,6 +55,3 @@
                        :object object})))
     aggregate))
 
-(defn with-init
-  [ctx body-fn]
-  (body-fn ctx))

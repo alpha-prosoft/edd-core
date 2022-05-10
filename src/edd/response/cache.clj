@@ -10,7 +10,7 @@
   :default
   [{:keys [service-name breadcrumbs request-id]
     :or   {service-name ""}}
-   {:keys [idx] :as resp}]
+   {:keys [idx] :as _resp}]
   (log/info "No response cache implementation")
   (let [key (str "response/"
                  request-id
