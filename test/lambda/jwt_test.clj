@@ -123,21 +123,31 @@
 (deftest parse-token-with-custom-mapping-test
   (with-redefs [util/get-current-time-ms (fn [] 1602668081782)]
     (let [ctx {:jwks-all (:keys jwks-key-3)
-               :env {:region region}
-               :auth {:user-pool-id "eu-central-1_RsHDV8c8n"
-                      :client-id "1unj1klo6859lam8vmbkuhk3r3"
-                      :client-secret util-test/user-pool-client-secret
-                      :mapping {:id "sub"}}}]
-      (is (= (merge ctx
-                    {:user {:id "000d0c9d-d5f1-4cbd-adb2-fa9480be2346"
-                            :email "john.smith@rbinternational.com"
-                            :roles [:anonymous
-                                    :lime-risk-managers
-                                    :lime-account-managers
-                                    :lime-limit-managers
-                                    :realm-test]
-                            :department "No Department"
-                            :department-code "000"}})
+               :env      {:region region}
+               :auth     {:user-pool-id  "eu-central-1_RsHDV8c8n"
+                          :client-id     "1unj1klo6859lam8vmbkuhk3r3"
+                          :client-secret util-test/user-pool-client-secret
+                          :mapping       {:id "sub"}}}]
+      (is (= {:at_hash          "Uivh_GqvLz8ud5kvbQpOyA"
+              :aud              "1unj1klo6859lam8vmbkuhk3r3"
+              :auth_time        1646647402
+              :cognito:groups   ["lime-risk-managers"
+                                 "lime-account-managers"
+                                 "lime-limit-managers"
+                                 "realm-test"]
+              :cognito:username "john.smith@rbinternational.com"
+              :department       "No Department"
+              :department_code  "000"
+              :email            "john.smith@rbinternational.com"
+              :email_verified   false
+              :event_id         "43909f02-af54-4ef1-9b8f-122f7d94a490"
+              :exp              1647513070
+              :family_name      "Smith"
+              :given_name       "John"
+              :iat              1647469870
+              :iss              "https://cognito-idp.eu-central-1.amazonaws.com/eu-central-1_RsHDV8c8n"
+              :sub              "000d0c9d-d5f1-4cbd-adb2-fa9480be2346"
+              :token_use        "id"}
              (jwt/parse-token ctx token-with-department))))))
 
 (deftest toke-expired-test
