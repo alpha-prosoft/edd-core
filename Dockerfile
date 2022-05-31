@@ -19,7 +19,6 @@ COPY --chown=build:build deps.edn deps.edn
 COPY --chown=build:build tests.edn tests.edn
 COPY --chown=build:build format.sh format.sh
 COPY --chown=build:build ansible ansible
-COPY --chown=build:build repl repl
 
 RUN ./format.sh check
 
@@ -31,7 +30,7 @@ USER root
 RUN mkdir -p /home/jenkins
 RUN chown build:build /home/build -R &&\
     chown build:build /home/jenkins -R &&\
-    chown build:build /dist -R 
+    chown build:build /dist -R
 
 
 USER build

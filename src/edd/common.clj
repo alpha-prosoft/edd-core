@@ -1,7 +1,8 @@
 (ns edd.common
   (:require
    [edd.dal :as dal]
-   [edd.search :as search]
+   [edd.view-store.common  :as common-view-store]
+   [edd.view-store.elastic :as elastic-view-store]
    [edd.el.event :as el-event]
    [lambda.uuid :as uuid]
    [clojure.tools.logging :as log]))
@@ -34,6 +35,15 @@
         (:aggregate resp)
         resp))
     (log/warn "Id is nil")))
+
+(defn fetch-by-id
+  [ctx & [query]]
+  {:pre [(or (:query ctx)
+             query)]}
+  (if-let [id (or (-> ctx :query :id)
+                  (:id query))]
+    (common-view-store/get-snapshot ctx id)
+    (log/warn "Fetch-by-id -> Id is nil")))
 
 (defn get-sequence-number-for-id
   [ctx & [query]]
@@ -70,7 +80,7 @@
   [ctx & [query]]
   {:pre [(or (:query ctx)
              query)]}
-  (search/advanced-search
+  (elastic-view-store/advanced-search
    (if query
      (assoc ctx :query query)
      ctx)))
@@ -79,10 +89,11 @@
   [ctx & [query]]
   {:pre [(or (:query ctx)
              query)]}
-  (search/simple-search
+  (elastic-view-store/simple-search
+   ctx
    (if query
-     (assoc ctx :query query)
-     ctx)))
+     (:query query)
+     (:query ctx))))
 
 (defn create-identity
   [& _]

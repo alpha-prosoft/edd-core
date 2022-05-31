@@ -20,6 +20,7 @@
             [malli.core :as m]
             [malli.error :as me]
             [edd.el.cmd :as cmd]
+            [edd.el.client :as edd-client]
             [edd.response.cache :as response-cache]
             [edd.core :as edd]
             [lambda.test.fixture.core :as lambda-fixture-core]
@@ -116,7 +117,7 @@
                                      (me/humanize))})))
   (mapv
    #(-> {:method :post
-         :url (cmd/calc-service-query-url (:service %))
+         :url (edd-client/calc-service-query-url (:service %))
          :response {:body (util/to-json {:result (:resp %)})}
          :request {:body {:query
                           (:query %)}}})

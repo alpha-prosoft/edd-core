@@ -44,11 +44,9 @@
     (view-store/update-snapshot ctx {:id 2 :payload "payload"})
     (view-store/update-snapshot ctx {:id 3 :payload "pa2"})
     (is (= [{:id 3 :payload "pa2"}]
-           (common/simple-search (assoc ctx
-                                        :query {:id 3}))))
+           (common/simple-search ctx {:query {:id 3}})))
     (is (= []
-           (common/simple-search (assoc ctx
-                                        :query {:id 4}))))))
+           (common/simple-search ctx {:query {:id 4}})))))
 
 (deftest when-store-sequence-then-ok
   (mock/with-mock-dal

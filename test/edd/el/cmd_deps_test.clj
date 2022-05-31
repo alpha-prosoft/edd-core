@@ -4,6 +4,7 @@
             [edd.dal :as dal]
             [edd.common :as common]
             [edd.el.cmd :as cmd]
+            [edd.el.client :as edd-client]
             [edd.core :as edd]
             [lambda.test.fixture.client :as client]
             [edd.memory.event-store :as event-store]
@@ -20,52 +21,51 @@
 (deftest test-prepare-context-for-command-with-remote-query
   (testing
    "Test if context if properly prepared for remote queries"
-    (let [meta {:realm :realm3}
-          ctx (-> mock/ctx
-                  (edd-ctx/put-cmd :cmd-id :test-cmd
-                                   :options {:deps
-                                             {:test-value
-                                              {:query   (fn [_ cmd]
-                                                          {:param (:value cmd)
-                                                           :query-id :some-query})
-                                               :service :remote-svc}}})
-                  (assoc :meta meta
-                         :request-id request-id
-                         :interaction-id interaction-id)
-                  (event-store/register))]
-      (mock/with-mock-dal
-        (assoc ctx
-               :env {"PrivateHostedZoneName" "mock.com"}
-               :deps [{:service        :remote-svc
-                       :request-id     request-id
-                       :interaction-id interaction-id
-                       :meta           meta
-                       :query          {:param "Some Value"
-                                        :query-id :some-query}
-                       :resp           {:remote :response}}])
-        (let [cmd {:cmd-id :test-cmd
-                   :id     cmd-id
-                   :value  "Some Value"}
+    (with-redefs [util/get-env (fn [v]
+                                 (get {"PrivateHostedZoneName" "mock.com"} v))]
+      (let [meta {:realm :realm3}]
+        (mock/with-mock-dal
+          {:dps [{:service        :remote-svc
+                  :request-id     request-id
+                  :interaction-id interaction-id
+                  :meta           meta
+                  :query          {:param "Some Value"
+                                   :query-id :some-query}
+                  :resp           {:remote :response}}]}
+          (let [cmd {:cmd-id :test-cmd
+                     :id     cmd-id
+                     :value  "Some Value"}
+                ctx (-> {}
+                        (edd-ctx/put-cmd :cmd-id :test-cmd
+                                         :options {:deps
+                                                   {:test-value
+                                                    {:query   (fn [_ cmd]
+                                                                {:param (:value cmd)
+                                                                 :query-id :some-query})
+                                                     :service :remote-svc}}})
+                        (assoc :meta meta
+                               :request-id request-id
+                               :interaction-id interaction-id)
+                        (event-store/register))
+                deps (cmd/fetch-dependencies-for-command
+                      ctx
+                      cmd)]
+            (is (= {:test-value
+                    {:remote :response}}
+                   deps))
 
-              deps (cmd/fetch-dependencies-for-command
-                    ctx
-                    cmd)]
-          (is (= {:test-value
-                  {:remote :response}}
-                 deps))
-
-          (is (= [{:body            {:query          {:param "Some Value"
-                                                      :query-id :some-query}
-                                     :meta           meta
-                                     :request-id     request-id
-                                     :interaction-id interaction-id}
-                   :headers         {"X-Authorization" "#mock-id-token"
-                                     "Content-Type"    "application/json"}
-                   :method          :post
-                   :idle-timeout    10000
-                   :connect-timeout 300
-                   :url             (cmd/calc-service-query-url "remote-svc")}]
-                 (client/traffic-edn))))))))
+            (is (= [{:body            {:query          {:param "Some Value"
+                                                        :query-id :some-query}
+                                       :meta           meta
+                                       :request-id     request-id
+                                       :interaction-id interaction-id}
+                     :headers         {"X-Authorization" "#mock-id-token"
+                                       "Content-Type"    "application/json"}
+                     :method          :post
+                     :idle-timeout    10000
+                     :connect-timeout 300
+                     :url             (cmd/calc-service-query-url "remote-svc")}]
+                   (client/traffic-edn)))))))))
 
 (deftest test-remote-dependency
   (let [meta {:realm :realm4}
@@ -77,18 +77,20 @@
                   util/get-env (fn [v]
                                  (get {"PrivateHostedZoneName" "mock.com"} v))]
       (client/mock-http
-       {}
+       ctx
        [{:method :post
          :url (cmd/calc-service-query-url "some-remote-service")
          :response {:body (util/to-json {:result {:a :b}})}}]
        (is (= {:a :b}
-              (cmd/resolve-remote-dependency
+              (edd-client/resolve-remote-dependency
                ctx
                {}
-               {:query   (fn [_ _cmd] {:a :b})
+               {:query   (fn [_ _cmd] {:a :b
+                                       :query-id :some-query-id})
                 :service :some-remote-service}
                {})))
-       (is (= [{:body            {:query          {:a :b}
+       (is (= [{:body            {:query          {:a :b
+                                                   :query-id :some-query-id}
                                   :meta           meta
                                   :request-id     request-id
                                   :interaction-id interaction-id}
@@ -100,10 +102,49 @@
                 :url             (cmd/calc-service-query-url "some-remote-service")}]
               (client/traffic-edn)))))))
 
-(deftest test-when-dependency-in-context-should-override
+(deftest test-remote-dep-when-query-id-is-not-set
+  (testing "If deps fn does not return a map with query-id we are skipping dependency resolution
+and return nil to enable query-fn to have when conditions based on previously resolved deps"
+    (let [meta {:realm :realm4}
+          ctx {:request-id     request-id
+               :interaction-id interaction-id
+               :meta           meta}]
+      (with-redefs [aws/get-token (fn [_ctx] "#id-token")
+                    dal/log-dps (fn [ctx] ctx)
+                    util/get-env (fn [v]
+                                   (get {"PrivateHostedZoneName" "mock.com"} v))]
+        (client/mock-http
+         ctx
+         [{:url (cmd/calc-service-query-url "some-remote-service")
+           :method :post
+           :response {:body (util/to-json {:result {:a :b}})}}]
+         (is (= nil
+                (edd-client/resolve-remote-dependency
+                 ctx
+                 {}
+                 {:query   (fn [_ _cmd] nil)
+                  :service :some-remote-service}
+                 {})))
+         (client/verify-traffic []))))))
 
+(deftest test-local-dep-when-query-id-is-not-set
+  (testing "If deps fn does not return a map with query-id we are skipping dependency resolution
+and return nil to enable query-fn to have when conditions based on previously resolved deps"
+    (let [meta {:realm :realm4}
+          ctx {:request-id     request-id
+               :interaction-id interaction-id
+               :meta           meta}]
+      (is (= nil
+             (edd-client/resolve-local-dependency
+              ctx
+              {}
+              (fn [deps _] (when (seq (-> deps :previous-dep :hits))
+                             {:query-id :some-query-id}))
+              {:previous-dep {:hits []}}))))))
+
+(deftest test-when-dependency-in-context-should-override
   (testing
-   "If depdency is in context (i.e. for tests) resolution should not override it"
+   "If dependency is in context (i.e. for tests) resolution should not override it"
     (let [cmd-id-1 #uuid "11111eeb-e677-4d73-a10a-1d08b45fe4dd"
           meta {:realm :realm4}
           ctx (assoc mock/ctx
