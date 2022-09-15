@@ -8,7 +8,7 @@
     <root level="INFO">
         <appender-ref ref="STDOUT" />
     </root>
-    <logger level="ERROR" name="com.zaxxer.hikari">
-    </logger>
+    <logger level="TRACE" name="com.zaxxer.hikari"></logger>
+    <logger level="DEBUG" name="logging.level.com.zaxxer.hikari.HikariConfig"></logger>
 
 </configuration>

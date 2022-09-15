@@ -10,7 +10,7 @@
       (is
        (= {:error "bla"}
           (dal/datafy
-           #(jdbc/execute! (:con ctx)
+           #(jdbc/execute! @(:connection ctx)
                            ["INSERT INTO glms.application_svc_seq(aggregate_id) VALUES ('1')"])))))))
 
 (defn test-unique-constraint
@@ -19,9 +19,9 @@
       (is
        (= {:error "bla"}
           (dal/datafy
-           #((jdbc/execute! (:con ctx)
+           #((jdbc/execute! @(:connection ctx)
                             ["INSERT INTO glms.identity_store(service, aggregate_id, id)
                                     VALUES ('test-svc', '0b7a9436-58b1-11ea-82b4-0242ac130003', '1')"])
-             (jdbc/execute! (:con ctx)
+             (jdbc/execute! @(:connection ctx)
                             ["INSERT INTO glms.identity_store(service, aggregate_id, id)
                                     VALUES ('test-svc', '0b7a9436-58b1-11ea-82b4-0242ac130003', '1')"]))))))))

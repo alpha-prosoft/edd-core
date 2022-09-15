@@ -195,7 +195,7 @@ information about blue green deployment in following sections.
 
 Runtime is entry point to your service/application. Job of runtime is to accept events and provide responses. Runtimes are usually not pure and are specific to environment. 
 
-Every runtime needs to invoke lambda.core/handle-request function with context (Map) as first argument. Required keys of context are are 
+Every runtime needs to invoke lambda.runtime/handle-request function with context (Map) as first argument. Required keys of context are are 
 :incocation-id as UUID to inficate invocation being handleed. 
 
 Second parameter is body which contains entire request as map. 
@@ -220,5 +220,5 @@ Second parameter is body which contains entire request as map.
                 :send-response send-response)
 ```
 
-Example of implemneted filters are in lambda.core.filters ns. 
+Example of implemneted filters are in lambda.filters ns. 
 

@@ -160,9 +160,6 @@
   [name]
   (log/debug "Loading config name:" name)
   (let [file (io/as-file name)
-        classpath (io/as-file
-                   (io/resource
-                    name))
         config (to-edn
                 (if (.exists ^File file)
                   (do
@@ -172,8 +169,7 @@
                         (decrypt name)))
                   (do
                     (log/debug "Loading config from classpath:" name)
-                    (-> classpath
-                        (slurp)
+                    (-> (slurp (io/resource name))
                         (decrypt name)))))
         config (compatibility->aws-user-pool config)
         env-config (to-edn

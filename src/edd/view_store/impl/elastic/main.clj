@@ -10,6 +10,7 @@
 
 (defn with-init
   [ctx body-fn]
+  (log/debug "Initializing elastic search")
   (body-fn ctx))
 
 (defn realm
@@ -203,11 +204,6 @@
   [ctx aggregate]
   (log/info "Updating aggregate " (realm ctx) (:id aggregate) (:version aggregate))
   (store-to-elastic ctx))
-
-(defn with-init
-  [ctx body-fn]
-  (log/debug "Initializing")
-  (body-fn ctx))
 
 (defn get-snapshot
   [ctx id]

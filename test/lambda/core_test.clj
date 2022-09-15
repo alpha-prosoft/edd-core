@@ -1,6 +1,6 @@
 (ns lambda.core-test
   (:require [clojure.test :refer [deftest testing is]]
-            [lambda.core :as core]
+            [lambda.runtime :as core]
             [lambda.util :as util]
             [lambda.filters :as filters]))
 

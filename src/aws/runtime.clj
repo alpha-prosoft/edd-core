@@ -1,6 +1,6 @@
 (ns aws.runtime
   (:require [lambda.util :as util]
-            [lambda.core :as core]
+            [lambda.runtime :as core]
             [aws.aws :as aws]
             [aws.ctx :as aws-ctx]
             [lambda.uuid :as uuid]
@@ -54,7 +54,7 @@
                 :next-request (fn [_i]
                                 (let [{:keys [error body] :as request} (aws/get-next-request)]
                                   (if-not error
-                                    {:body (util/to-edn body)
+                                    {:body body
                                      :invocation-id  (-> request
                                                          :headers
                                                          :lambda-runtime-aws-request-id
@@ -62,8 +62,6 @@
 
                                     (do (log/error error)
                                         :skip))))))
-
-(def start lambda-custom-runtime)
 
 (defn form-invocation-number
   [i]

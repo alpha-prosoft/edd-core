@@ -76,14 +76,14 @@
 (def service-name lambda-ctx/default-service-name)
 
 (def ctx
-  (-> {}
+  (-> {:service-name service-name}
       (assoc-in [:edd :config :secrets-file] "files/secret-eu-west.json")
       (response-cache/register-default)
       (elastic-view-store/register :implementation :mock)
       (event-store/register)))
 
 (def mock-s3-ctx
-  (-> {}
+  (-> {:service-name service-name}
       (assoc-in [:edd :config :secrets-file] "files/secret-eu-west.json")
       (response-cache/register-default)
       (s3-view-store/register :implementation :mock)

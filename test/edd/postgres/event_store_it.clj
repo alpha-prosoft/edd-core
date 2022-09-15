@@ -15,7 +15,6 @@
             [sdk.aws.common :as aws-common]
             [edd.response.s3 :as s3-response]
             [lambda.ctx :as lambda-ctx]
-            [aws.ctx :as aws-ctx]
             [sdk.aws.s3 :as s3]))
 
 (def fx-id (uuid/gen))
