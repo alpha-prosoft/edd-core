@@ -121,6 +121,7 @@
                                        "InteractionId" {:S (:interaction-id ctx)}
                                        "EventSeq"      {:N (str (:event-seq event))}
                                        "Data"          {:S (util/to-json event)}},
+                           :ConditionExpression "attribute_not_exists(Id)"
                            :TableName (table-name ctx :event-store)}})
                        (:events resp))
                       (map
@@ -136,13 +137,15 @@
                                        "Data"          {:S (util/to-json (assoc effect
                                                                                 :request-id (:request-id ctx)
                                                                                 :interaction-id (:interaction-id ctx)))}},
+                           :ConditionExpression "attribute_not_exists(Id)"
                            :TableName (table-name ctx :effect-store)}})
                        (:effects resp))
                       (map
                        (fn [item]
                          {:Put
                           {:Item      {"Id"            {:S (str
-                                                            (:service-name ctx)
+                                                            (name
+                                                             (:service-name ctx))
                                                             "/"
                                                             (:identity item))}
                                        "ItemType"      {:S :identity}
@@ -152,6 +155,7 @@
                                        "InteractionId" {:S (:interaction-id ctx)}
                                        "AggregateId"   {:S (:id item)}
                                        "Data"          {:S (util/to-json item)}},
+                           :ConditionExpression "attribute_not_exists(Id)"
                            :TableName (table-name ctx :identity-store)}})
                        (:identities resp)))]
     (when-not (empty? items)

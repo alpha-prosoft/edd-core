@@ -10,9 +10,10 @@
 
 (defn get-next-invocation
   [runtime-api]
-  (util/http-get
+  (util/http-request
    (str "http://" runtime-api "/2018-06-01/runtime/invocation/next")
-   {:timeout 90000000}))
+   {:method :get
+    :timeout 90000000}))
 
 (defn get-next-request []
   (let [runtime-api (util/get-env "AWS_LAMBDA_RUNTIME_API")

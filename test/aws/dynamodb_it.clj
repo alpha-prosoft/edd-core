@@ -36,7 +36,8 @@
 (def effect-id (uuid/gen))
 
 (deftest store-results-test
-  (let [identity {:identity "id-1"
+  (let [id-val (str "iden-" (uuid/gen))
+        identity {:identity id-val
                   :id       agg-id}
         event {:event-id  :e1
                :event-seq 1
@@ -78,12 +79,12 @@
                           :TableName (event-store/table-name ctx :effect-store)}))))
     (is (= {:Item {:Data          {:S (util/to-json identity)}
                    :AggregateId   {:S agg-id}
-                   :Id            {:S "test-source/id-1"}
+                   :Id            {:S (str "test-source/" id-val)}
                    :InteractionId {:S interaction-id}
                    :ItemType      {:S :identity}
                    :RequestId     {:S request-id}
                    :Service       {:S :test-source}}}
            (ddb/make-request
             (assoc ctx :action "GetItem"
-                   :body {:Key       {:Id {:S "test-source/id-1"}}
+                   :body {:Key       {:Id {:S (str "test-source/" id-val)}}
                           :TableName (event-store/table-name ctx :identity-store)}))))))

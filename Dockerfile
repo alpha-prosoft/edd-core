@@ -38,9 +38,6 @@ USER build
 
 ARG BUILD_ID
 
-
-RUN ip address
-
 RUN set -e &&\
     echo "Org: ${ARTIFACT_ORG}" &&\
     clj -M:test:unit &&\
