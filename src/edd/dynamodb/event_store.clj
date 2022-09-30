@@ -73,7 +73,7 @@
               (assoc ctx :action "GetItem"
                      :body {:Key       {:Id
                                         {:S (str
-                                             (:service-name ctx)
+                                             (name (:service-name ctx))
                                              "/"
                                              identity)}}
                             :TableName (table-name ctx :identity-store)}))]
