@@ -76,6 +76,7 @@ RUN set -e &&\
     ansible-playbook ansible/deploy/deploy.yaml &&\
     echo "Building b${BUILD_ID}" &&\
     clj -M:jar  \
+       --aot "clojure.java.io" \
        --app-group-id ${ARTIFACT_ORG} \
        --app-artifact-id ${PROJECT_NAME} \
        --app-version "1.${BUILD_ID}" &&\
@@ -96,29 +97,37 @@ RUN set -e &&\
        cd $i &&\
        echo "Building module $i" &&\
        bb -i '(let [build-id "'${BUILD_ID}'" \
-                    lib (symbol `edd-core.glms/edd-core) \
+                    new-lib (symbol "'${ARTIFACT_ORG}/${PROJECT_NAME}'") \
+                    lib (symbol "local/'${PROJECT_NAME}'") \
                     deps (read-string \
                           (slurp (io/file "deps.edn"))) \
-                    global (get-in deps [:deps lib]) \
-                    deps (if global \
-                           (assoc-in deps [:deps lib] {:mvn/version (str "1." build-id)}) \
+                    deps (if (get-in deps [:deps lib]) \
+                           (-> deps \
+                               (update-in [:deps] (fn [%] (dissoc % lib))) \
+                               (assoc-in [:deps new-lib] \
+                                   {:mvn/version (str "1." build-id)})) \
                            deps) \
                     aliases [:test] \
                     deps (reduce \
                            (fn [p alias] \
                              (if (get-in p [:aliases alias :extra-deps lib]) \
-                               (assoc-in p [:aliases alias :extra-deps lib] \
-                                         {:mvn/version (str "1." build-id)}) \
-                               p)) \
+                               (-> p \
+                                   (update-in [:aliases alias :extra-deps] \
+                                        (fn [%] (dissoc % lib))) \
+                                   (assoc-in [:aliases alias :extra-deps new-lib] \
+                                         {:mvn/version (str "1." build-id)})) \
+			       p)) \
                            deps \
                            aliases)] \
-                (spit "deps.edn" (with-out-str \
-                                   (clojure.pprint/pprint deps))))' &&\
+                (spit "deps.edn" \
+		      (with-out-str (clojure.pprint/pprint deps))))' &&\
+       echo "Generated deps.edn" &&\
        cat deps.edn &&\
        clj -Stree &&\
        clj -M:test:it &&\
        clj -M:test:unit &&\
        clj -M:jar  \
+             --aot "clojure.java.io" \
              --app-group-id ${ARTIFACT_ORG} \
              --app-artifact-id ${i} \
              --app-version "1.${BUILD_ID}" &&\
