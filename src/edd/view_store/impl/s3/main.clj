@@ -1,5 +1,6 @@
 (ns edd.view-store.impl.s3.main
   (:require [sdk.aws.s3 :as s3]
+            [clojure.tools.logging :as log]
             [lambda.util :as util]
             [edd.ctx :as edd-ctx]
             [lambda.ctx :as lambda-ctx]))
@@ -29,6 +30,7 @@
                    (assoc-in [:s3 :object :key]
                              (get-key ctx id)))
         {:keys [error] :as resp} (s3/get-object ctx object)]
+    (log/info "Fetching from S3: " object resp)
     (cond
       (= resp nil) nil
       (not error) (-> resp

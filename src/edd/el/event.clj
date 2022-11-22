@@ -64,14 +64,16 @@
 (defn fetch-snapshot
   [{:keys [id] :as ctx}]
 
-  (if-let [snapshot (view-store/get-snapshot ctx id)]
-    (do
-      (when snapshot
-        (log/info "Found snapshot: " (:version snapshot)))
-      (assoc ctx
-             :snapshot snapshot
-             :version (:version snapshot)))
-    ctx))
+  (util/d-time
+   (str "Fetching snapshot: " id)
+   (if-let [snapshot (view-store/get-snapshot ctx id)]
+     (do
+       (when snapshot
+         (log/info "Found snapshot: " (:version snapshot)))
+       (assoc ctx
+              :snapshot snapshot
+              :version (:version snapshot)))
+     ctx)))
 
 (defn get-events [ctx]
   (assoc ctx :events (dal/get-events ctx)))
@@ -81,7 +83,10 @@
   {:pre [(:id ctx)]}
   (let [cache-snapshot (request-cache/get-aggregate ctx id)]
     (if cache-snapshot
-      (assoc ctx :aggregate cache-snapshot)
+      (do
+        (log/info "Using cached snapshot: " (:id cache-snapshot)
+                  ", version: " (:version cache-snapshot))
+        (assoc ctx :aggregate cache-snapshot))
       (-> ctx
           (fetch-snapshot)
           (get-events)

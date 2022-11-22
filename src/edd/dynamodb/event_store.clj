@@ -81,12 +81,17 @@
 
 (defmethod get-events
   :dynamodb
-  [{:keys [id] :as ctx}]
+  [{:keys [id version]
+    :as   ctx
+    :or   {version 0}}]
   (let [resp (dynamodb/make-request
               (assoc ctx :action "Query"
                      :body {:KeyConditions {:Id
                                             {:AttributeValueList [{:S id}]
-                                             :ComparisonOperator "EQ"}}
+                                             :ComparisonOperator "EQ"}
+                                            :EventSeq
+                                            {:AttributeValueList [{:N (str version)}]
+                                             :ComparisonOperator "GT"}}
                             :TableName     (table-name ctx :event-store)}))]
     (map
      (fn [event]

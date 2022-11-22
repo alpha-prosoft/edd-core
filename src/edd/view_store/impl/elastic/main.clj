@@ -207,13 +207,16 @@
 (defn get-snapshot
   [ctx id]
   (log/info "Fetching snapshot aggregate" (realm ctx) id)
-  (let [index-name (make-index-name (realm ctx) (:service-name ctx))
-        {:keys [error] :as body} (el/query
-                                  {:config (get-in ctx [:view-store :config] ctx)
-                                   :method "GET"
-                                   :path   (str "/" index-name "/_doc/" id)
-                                   :aws    (:aws ctx)}
-                                  :ignored-status 404)]
-    (if error
-      (throw (ex-info "Failed to fetch snapshot" error))
-      (:_source body))))
+  (util/d-time
+   (str "Fetching snapshot aggregate in realm: " (realm ctx)
+        ", id: " id)
+   (let [index-name (make-index-name (realm ctx) (:service-name ctx))
+         {:keys [error] :as body} (el/query
+                                   {:config (get-in ctx [:view-store :config] ctx)
+                                    :method "GET"
+                                    :path   (str "/" index-name "/_doc/" id)
+                                    :aws    (:aws ctx)}
+                                   :ignored-status 404)]
+     (if error
+       (throw (ex-info "Failed to fetch snapshot" error))
+       (:_source body)))))

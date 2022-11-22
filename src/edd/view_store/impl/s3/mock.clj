@@ -14,7 +14,7 @@
 
 (defn get-snapshot
   [ctx id & [_version]]
-  (log/info "Fetching snapshot aggregate" id)
+  (log/info "Fetching mock snapshot aggregate" id)
   (let [realm (edd-ctx/get-realm ctx)
         service-name (lambda-ctx/get-service-name ctx)]
     (->> @(common/get-store)
