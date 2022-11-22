@@ -60,7 +60,7 @@
       (edd/reg-event :event-2
                      (fn [_agg _event]
                        (throw (ex-info "Sory" {:something "happened"}))))))
-0
+
 (deftest apply-when-two-events-1
   (testing
    "We apply 3 events, we should update aggregate only once"

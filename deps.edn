@@ -19,8 +19,11 @@
   com.auth0/jwks-rsa #:mvn{:version "0.21.1"},
   org.clojure/core.async #:mvn{:version "1.5.648"},
   http-kit/http-kit #:mvn{:version "2.6.0"}},
- :paths ["src" "resources" "features/edd-core-swagger/src"
-         "modules/edd-core-schema/src"],
+ :paths
+ ["src"
+  "resources"
+  "features/edd-core-swagger/src"
+  "modules/edd-core-schema/src"],
  :aliases
  {:jar
   {:extra-paths ["resources"],

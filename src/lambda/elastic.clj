@@ -11,13 +11,17 @@
   (get (System/getenv) name default))
 
 (defn query
-  [{:keys [method path body view-store aws]} & {:keys [ignored-status]}]
-  (let [elastic-search (get-in view-store [:config])
-        elastic-auth (util/get-env "ELASTIC_AUTH")
+  [{:keys [method path body config aws]} & {:keys [ignored-status]}]
+  (when-not config
+    (throw (ex-info "Config not valid" {:config config})))
+  (when (and body
+             (not (string? body)))
+    (throw (ex-info "Body needs to be serialized to string" {:body (type body)})))
+  (let [elastic-auth (util/get-env "ELASTIC_AUTH")
         req (cond-> {:method     method
                      :uri        path
                      :query      ""
-                     :headers    {"Host"         (:url elastic-search)
+                     :headers    {"Host"         (:url config)
                                   "Content-Type" "application/json"
                                   "X-Amz-Date" (common/create-date)}
                      :service    "es"
@@ -36,7 +40,7 @@
                                          "Authorization" auth))
                          :keepalive 300000}
                   body (assoc :body body))
-        url (str (or (:scheme elastic-search) "https")
+        url (str (or (:scheme config) "https")
                  "://"
                  (get (:headers req) "Host")
                  (:uri req))

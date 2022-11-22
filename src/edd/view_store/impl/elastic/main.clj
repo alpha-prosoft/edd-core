@@ -116,11 +116,10 @@
   (let [json-query (util/to-json elastic-query)
         index-name (make-index-name (realm ctx) (or (:index-name ctx) (:service-name ctx)))
         {:keys [error] :as body} (el/query
-                                  (merge
-                                   ctx
-                                   {:method "POST"
-                                    :path   (str "/" index-name "/_search")
-                                    :body   json-query}))
+                                  {:config (get-in ctx [:view-store :config] ctx)
+                                   :method "POST"
+                                   :path   (str "/" index-name "/_search")
+                                   :body   json-query})
         total (get-in body [:hits :total :value])]
 
     (when error
@@ -176,7 +175,8 @@
         body (util/d-time
               "Doing elastic search (Simple-search)"
               (el/query
-               {:method         "POST"
+               {:config (get-in ctx [:view-store :config] ctx)
+                :method         "POST"
                 :path           (str "/" index-name "/_search")
                 :body           (create-simple-query param)
                 :elastic-search (get-in ctx [:view-store :config])
@@ -190,12 +190,11 @@
   (log/debug "Updating aggregate" (realm ctx) aggregate)
   (let [index-name (make-index-name (realm ctx) (:service-name ctx))
         {:keys [error]} (el/query
-                         (merge
-                          ctx
-                          {:method "POST"
-                           :path   (str "/" index-name "/_doc/" (:id aggregate))
-                           :body   (util/to-json aggregate)
-                           :aws    (:aws ctx)}))]
+                         {:config (get-in ctx [:view-store :config] ctx)
+                          :method "POST"
+                          :path   (str "/" index-name "/_doc/" (:id aggregate))
+                          :body   (util/to-json aggregate)
+                          :aws    (:aws ctx)})]
     (if error
       (throw (ex-info "Could not store aggregate" {:error error}))
       ctx)))
@@ -210,11 +209,10 @@
   (log/info "Fetching snapshot aggregate" (realm ctx) id)
   (let [index-name (make-index-name (realm ctx) (:service-name ctx))
         {:keys [error] :as body} (el/query
-                                  (merge
-                                   ctx
-                                   {:method "GET"
-                                    :path   (str "/" index-name "/_doc/" id)
-                                    :aws    (:aws ctx)})
+                                  {:config (get-in ctx [:view-store :config] ctx)
+                                   :method "GET"
+                                   :path   (str "/" index-name "/_doc/" id)
+                                   :aws    (:aws ctx)}
                                   :ignored-status 404)]
     (if error
       (throw (ex-info "Failed to fetch snapshot" error))

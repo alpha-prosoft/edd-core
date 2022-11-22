@@ -27,12 +27,11 @@
                   "_" (:service-name ctx) "/_doc")]
     (doseq [i (mock/peek-state :aggregate-store)
             {:keys [error]} (el/query
-                             (merge
-                              ctx
-                              {:method "POST"
-                               :path   path
-                               :body   (util/to-json
-                                        i)}))]
+                             {:config (get-in ctx [:view-store :config])
+                              :method "POST"
+                              :path   path
+                              :body   (util/to-json
+                                       i)})]
       (when error
         (throw (ex-info "Error loading data" error))))
     (log/info (str "Data loaded: " path))))
@@ -62,23 +61,21 @@
 
       (log/info "Deleting existing test indices" service-name)
       (let [{:keys [error]} (el/query
-                             (merge
-                              el-ctx
-                              {:method "DELETE"
-                               :path   "/test*"}))]
+                             {:config (get-in el-ctx [:view-store :config])
+                              :method "DELETE"
+                              :path   "/test*"})]
         (when error
           (throw (ex-info "Deleting indices" error))))
 
       (log/info "Index name" service-name)
       (let [{:keys [error] :as body} (el/query
-                                      (merge
-                                       el-ctx
-                                       {:method "PUT"
-                                        :path   (str "/"
-                                                     (elastic-view-store/realm el-ctx)
-                                                     "_"
-                                                     service-name)
-                                        :body   (util/to-json body)}))]
+                                      {:config (get-in el-ctx [:view-store :config])
+                                       :method "PUT"
+                                       :path   (str "/"
+                                                    (elastic-view-store/realm el-ctx)
+                                                    "_"
+                                                    service-name)
+                                       :body   (util/to-json body)})]
         (when error
           (throw (ex-info "Error creating index"
                           error)))
@@ -86,14 +83,13 @@
       (load-data el-ctx)
       (Thread/sleep 2000)
       (let [{:keys [error] :as body} (el/query
-                                      (merge
-                                       el-ctx
-                                       {:method "GET"
-                                        :path   (str "/"
-                                                     (elastic-view-store/realm el-ctx)
-                                                     "_"
-                                                     service-name
-                                                     "/_mapping")}))]
+                                      {:config (get-in el-ctx [:view-store :config])
+                                       :method "GET"
+                                       :path   (str "/"
+                                                    (elastic-view-store/realm el-ctx)
+                                                    "_"
+                                                    service-name
+                                                    "/_mapping")})]
         (when error
           (throw (ex-info "Error getting index mapping"
                           error)))
@@ -106,10 +102,9 @@
         (log/info el-result)
         (log/info mock-result)
         (el/query
-         (merge
-          el-ctx
-          {:method "DELETE"
-           :path   (str "/" service-name)}))
+         {:config (get-in el-ctx [:view-store :config])
+          :method "DELETE"
+          :path   (str "/" service-name)})
         [el-result mock-result]))))
 
 (deftest test-elastic-mock-parity-1
@@ -265,7 +260,7 @@
     (is (= expected
            mock-result))))
 
-(deftest test-elastic-mock-parity-test-search-only-2
+(deftest test-elastic-mock-parity-earch-only-2
   (let [data [{:k1 "consectetur" :attrs {:type :booking-company}}
               {:k1 "lorem" :k2 "1adc" :attrs {:type :breaking-company}}
               {:k1 "ipsum" :k2 "2abc" :attrs {:type :breaking-company}}
