@@ -7,42 +7,47 @@
             [edd.dynamodb.event-store :as event-store]
             [lambda.uuid :as uuid]))
 
-(def request-id (uuid/gen))
-(def interaction-id (uuid/gen))
-
 (def ctx
   (-> {:elastic-search         {:url (util/get-env "IndexDomainEndpoint")}
-       :db                     {:name "dynamodb-svc"}
-       :request-id             request-id
-       :interaction-id         interaction-id
        :service-name           "test-source"
        :environment-name-lower "pipeline"
-       :aws                    {:region                (util/get-env "AWS_DEFAULT_REGION")
+       :meta                   {:realm :test}
+       :aws                    {:region               "eu-west-1"
                                 :aws-access-key-id     (util/get-env "AWS_ACCESS_KEY_ID")
                                 :aws-secret-access-key (util/get-env "AWS_SECRET_ACCESS_KEY")
                                 :aws-session-token     (util/get-env "AWS_SESSION_TOKEN")}}
       (event-store/register)))
 
 (deftest test-list-tables
-  (is (= ["effect-store-ddb"
-          "event-store-ddb"
-          "identity-store-ddb"]
+  (is (= ["pipeline-main-test-effect-store-ddb"
+          "pipeline-main-test-event-store-ddb"
+          "pipeline-main-test-identity-store-ddb"
+          "pipeline-main-test-request-log-ddb"
+          "pipeline-main-test-response-log-ddb"]
          (->> (ddb/list-tables ctx)
               (:TableNames)
-              (filter #(str/includes? % "dynamodb-svc"))
+              (filter #(str/includes? % "pipeline-main-test"))
               (map #(str/replace % #".*-svc-" ""))))))
 
-(def agg-id (uuid/gen))
-(def effect-id (uuid/gen))
-
 (deftest store-results-test
-  (let [id-val (str "iden-" (uuid/gen))
+  (let [request-id (uuid/gen)
+        agg-id (uuid/gen)
+        effect-id (uuid/gen)
+        interaction-id (uuid/gen)
+        invocation-id (uuid/gen)
+        ctx (assoc ctx
+                   :request-id             request-id
+                   :interaction-id         interaction-id
+                   :breadcrumbs            [0]
+                   :invocation-id          invocation-id)
+        id-val (str "iden-" (uuid/gen))
         identity {:identity id-val
                   :id       agg-id}
         event {:event-id  :e1
                :event-seq 1
                :id        agg-id}
         command {:service  :test-svc
+                 :breadcrumbs [0 1]
                  :commands [{:cmd-id :cmd-test
                              :id     agg-id}]}]
     (with-redefs [uuid/gen (fn [] effect-id)]
@@ -54,28 +59,38 @@
 
     (is (= {:Item {:Data          {:S (util/to-json event)}
                    :EventSeq      {:N "1"}
-                   :Id            {:S agg-id}
+                   :AggregateId   {:S agg-id}
                    :InteractionId {:S interaction-id}
+                   :Breadcrumbs {:S "0"},
+                   :InvocationId {:S invocation-id}
                    :ItemType      {:S :event}
                    :RequestId     {:S request-id}
                    :Service       {:S :test-source}}}
            (ddb/make-request
             (assoc ctx :action "GetItem"
-                   :body {:Key       {:Id       {:S agg-id}
-                                      :EventSeq {:N "1"}}
+                   :body {:Key       {:AggregateId
+                                      {:S agg-id}
+                                      :EventSeq
+                                      {:N "1"}}
                           :TableName (event-store/table-name ctx :event-store)}))))
     (is (= {:Item {:Data          {:S (util/to-json (assoc command
                                                            :request-id request-id
                                                            :interaction-id interaction-id))}
-                   :Id            {:S effect-id}
+                   :Id            {:S (event-store/create-effect-id
+                                       request-id
+                                       (:breadcrumbs command))}
                    :InteractionId {:S interaction-id}
                    :ItemType      {:S :effect}
                    :RequestId     {:S request-id}
+                   :Breadcrumbs {:S "0"},
+                   :InvocationId {:S invocation-id}
                    :TargetService {:S :test-svc}
                    :Service       {:S :test-source}}}
            (ddb/make-request
             (assoc ctx :action "GetItem"
-                   :body {:Key       {:Id {:S effect-id}}
+                   :body {:Key       {:Id {:S (event-store/create-effect-id
+                                               request-id
+                                               (:breadcrumbs command))}}
                           :TableName (event-store/table-name ctx :effect-store)}))))
     (is (= {:Item {:Data          {:S (util/to-json identity)}
                    :AggregateId   {:S agg-id}
@@ -83,6 +98,8 @@
                    :InteractionId {:S interaction-id}
                    :ItemType      {:S :identity}
                    :RequestId     {:S request-id}
+                   :Breadcrumbs {:S "0"},
+                   :InvocationId {:S invocation-id}
                    :Service       {:S :test-source}}}
            (ddb/make-request
             (assoc ctx :action "GetItem"

@@ -1,9 +1,12 @@
 (ns lambda.s3-test
   (:require
    [aws.runtime :as runtime]
+   [sdk.aws.s3 :as s3]
+   [sdk.aws.common :as common]
    [edd.core :as edd]
    [lambda.test.fixture.client :as client]
    [lambda.filters :as fl]
+   [clojure.string :as string]
    [lambda.test.fixture.core :refer [mock-core]]
    [clojure.test :refer [is  deftest testing]]
    [clojure.tools.logging :as log])
@@ -156,3 +159,40 @@
   (is (thrown?
        ExceptionInfo
        (fl/parse-key "test/af42568c-f8e9-40ff-9329-d13f1c82fce5/af42568c-f8e9-40ff-9329-d13f1c82fcz3.matching1L.csv"))))
+
+(defn parse-url
+  [url]
+  (let [[url query] (string/split url #"\?")
+        query (string/split query #"&")
+        query (reduce
+               (fn [p v]
+                 (let [[key value] (string/split v #"=")]
+                   (assoc p key value)))
+               {}
+               query)]
+    {:url url
+     :query query}))
+
+(defn creadentials
+  []
+  {:aws-access-key-id "ASIAWP43YVBNOSIGRP5Y"
+   :aws-secret-access-key "VW90WSgYSvtJJhiPN3wZ+RWZflGhkXvqe4kek1/a"
+   :aws-session-token "IQoJb3JpZ2luX2VjEKP//////////wEaCWV1LXdlc3QtMSJHMEUCIQCFFC0xncoL0saR9DMoL5oXtbcCJ0y4Az/5HTqNlnPA1gIgYUjghlsFTfL1UIM8CHQ5V2F4D3m8DPaSZEiCg9dxpoQqjAQIXBACGgw0NDY0NjY0MDIzOTQiDABhvnwNj7KVqCErLirpA+IzuE2uipnjC/qMx1IspJq5qxHOroWuQGtJ0kbDEnUVbrmSzb+zNUs4R5C32WuFKuft0gXYF62rZcoEG18cfkyNHwb7NCQK0YHXRiiNxS7wOSlKI6Z093JGVwn52azyicSV07Ba6v3aG+ksGL55UOCL93GRS28eQaOLdTeBDsG12EIMRdegkrALdkapiBG7ywvcwNeObxE7jQZYfh4k1L1uZqn/KtfkJU4Oy+1yUdpk7Vyc04DPpSq6Sdd6YQLAPco3ei8tFdxtGAj35CTPKwfwEGhn2p+BhXchASmh3Sc02GIjdfK8oUjeVPgBw4s1r/2A0OVCnrSFuMh5rTr8LdEWvi1kuLdI9Q/PIIzzlL0fIWd406k7Gla8kNPF/TBuTYCkh2CEwKv6Lq9i+7M+jAP1cEhgdsWkYH+uUn5bnV46E+bXDtmA6TmBq9P0phTgmfVkDV22cI9aL+pREDNonYqD1OJ2NDguqrQ67FKCIosh19piI5tj5ljbD1qcVoiC6vDX0dyZ7u0Xw4/kHSF4wOrYiY+Zui7dr0DNg8KkRULfL0jTNk7ACI0rQsNL1l3mxsh8ji9buNsg/tJsIl1BfAc1aeDKLK8PE7naEMvPuJ8r/BHXxS56/JUqkH2LevTzSiMogs923NL6VTDytb6tBjqUAghwJzWTafQh8f8YIeuXp9S3X830SkgSChKhTU2oxnYJpstqXSl8MGGq1+BE3fPiPLxo+9THFHXLGOTVNeaxWl0Sr72b6O/jVv2Q9UBY3MSiT2UYE5GBDFnNTlYbH4jNcn1gEvOszEQCRUR5mq9blUoPQCC2Qb/imSBO9ubAT2iL9sqleOAh6aEp5WClC/9xVgr646O/6iJRe5crPsVf1VR63cz1l3IVCO/WIcBGF3HonhqqySM8PPbKzejp+vTpkQTZDjky+w7Pt6nS/Psn95bwXYZK5mYVTsZFhZ8SyfdtQAd0VXvVNqMNDM+02m6HDXqaGbOagFYtuNVjG9HoY3RrHfJ3PKipvhc1HcW1IZkJM8BSIA=="})
+
+(deftest s3-presigned-url-test
+  (with-redefs [common/create-date (fn []
+                                     "20240123T105604Z")]
+    (let [expected  (parse-url "https://123-upload-test.s3.eu-west-1.amazonaws.com/file1.gz?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=ASIAWP43YVBNOSIGRP5Y%2F20240123%2Feu-west-1%2Fs3%2Faws4_request&X-Amz-Date=20240123T105604Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEKP%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCWV1LXdlc3QtMSJHMEUCIQCFFC0xncoL0saR9DMoL5oXtbcCJ0y4Az%2F5HTqNlnPA1gIgYUjghlsFTfL1UIM8CHQ5V2F4D3m8DPaSZEiCg9dxpoQqjAQIXBACGgw0NDY0NjY0MDIzOTQiDABhvnwNj7KVqCErLirpA%2BIzuE2uipnjC%2FqMx1IspJq5qxHOroWuQGtJ0kbDEnUVbrmSzb%2BzNUs4R5C32WuFKuft0gXYF62rZcoEG18cfkyNHwb7NCQK0YHXRiiNxS7wOSlKI6Z093JGVwn52azyicSV07Ba6v3aG%2BksGL55UOCL93GRS28eQaOLdTeBDsG12EIMRdegkrALdkapiBG7ywvcwNeObxE7jQZYfh4k1L1uZqn%2FKtfkJU4Oy%2B1yUdpk7Vyc04DPpSq6Sdd6YQLAPco3ei8tFdxtGAj35CTPKwfwEGhn2p%2BBhXchASmh3Sc02GIjdfK8oUjeVPgBw4s1r%2F2A0OVCnrSFuMh5rTr8LdEWvi1kuLdI9Q%2FPIIzzlL0fIWd406k7Gla8kNPF%2FTBuTYCkh2CEwKv6Lq9i%2B7M%2BjAP1cEhgdsWkYH%2BuUn5bnV46E%2BbXDtmA6TmBq9P0phTgmfVkDV22cI9aL%2BpREDNonYqD1OJ2NDguqrQ67FKCIosh19piI5tj5ljbD1qcVoiC6vDX0dyZ7u0Xw4%2FkHSF4wOrYiY%2BZui7dr0DNg8KkRULfL0jTNk7ACI0rQsNL1l3mxsh8ji9buNsg%2FtJsIl1BfAc1aeDKLK8PE7naEMvPuJ8r%2FBHXxS56%2FJUqkH2LevTzSiMogs923NL6VTDytb6tBjqUAghwJzWTafQh8f8YIeuXp9S3X830SkgSChKhTU2oxnYJpstqXSl8MGGq1%2BBE3fPiPLxo%2B9THFHXLGOTVNeaxWl0Sr72b6O%2FjVv2Q9UBY3MSiT2UYE5GBDFnNTlYbH4jNcn1gEvOszEQCRUR5mq9blUoPQCC2Qb%2FimSBO9ubAT2iL9sqleOAh6aEp5WClC%2F9xVgr646O%2F6iJRe5crPsVf1VR63cz1l3IVCO%2FWIcBGF3HonhqqySM8PPbKzejp%2BvTpkQTZDjky%2Bw7Pt6nS%2FPsn95bwXYZK5mYVTsZFhZ8SyfdtQAd0VXvVNqMNDM%2B02m6HDXqaGbOagFYtuNVjG9HoY3RrHfJ3PKipvhc1HcW1IZkJM8BSIA%3D%3D&X-Amz-Signature=2568e135d6b7a1c73465bc97d9376184c927d2a5e0dcbff08402ad30d43b1a30")
+          expires 604800
+          response (s3/presigned-url
+                    {:debug true
+                     :aws (assoc (creadentials)
+                                 :region "eu-west-1")}
+                    {:expires expires
+                     :object {:s3
+                              {:bucket
+                               {:name "123-upload-test"}
+                               :object
+                               {:key "file1.gz"}}}})]
+      (is (= expected
+             (parse-url response))))))

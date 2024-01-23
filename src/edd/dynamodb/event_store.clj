@@ -16,27 +16,136 @@
                     get-records
                     store-results]]
    [lambda.util :as util]
-   [lambda.uuid :as uuid]))
+   [lambda.uuid :as uuid]
+   [clojure.string :as string]))
+
+(defn breadcrumb-str [breadcrumbs]
+  (string/join ":" (or breadcrumbs [0])))
 
 (defn table-name
   [ctx table]
-  (str
-   (:environment-name-lower ctx)
-   "-"
-   (get-in ctx [:db :name])
-   "-"
-   (name table)
-   "-ddb"))
+  (let [table-name (str
+                    (:environment-name-lower ctx)
+                    "-"
+                    ;(get-in ctx [:db :name])
+                    "main"
+                    "-"
+                    (name
+                     (get-in ctx
+                             [:meta :realm]
+                             :prod))
+                    "-"
+                    (name table)
+                    "-ddb")]
+    (println "Table name")
+    table-name))
+
+(defn data->response
+  [{:keys [RequestId
+           Breadcrumbs
+           InvocationId
+           InteractionId
+           Data
+           Id
+           Error
+           AggregateId]}]
+  (cond-> {}
+    RequestId (assoc :request-id (:S RequestId))
+    Breadcrumbs (assoc :breadcrumbs (:S Breadcrumbs))
+    InvocationId  (assoc :invocation-id (:S InvocationId))
+    InteractionId (assoc :interaction-id (:S InteractionId))
+    Data (assoc :data (util/to-edn (:S Data)))
+    Id (assoc :id (:S Id))
+    Error (assoc :error (util/to-edn (:S Error)))
+    AggregateId (assoc :aggregate-id (:S AggregateId))))
+
+(defn analytic-query
+  [ctx
+   table
+   {:keys [request-id
+           invocation-id
+           breadcrumbs
+           interaction-id]}]
+  (let [resp (cond
+               invocation-id
+               (dynamodb/make-request
+                (assoc ctx :action "Query"
+                       :body
+                       {:IndexName "invocation-id"
+                        :KeyConditionExpression "InvocationId = :v1"
+                        :ExpressionAttributeValues {":v1" {:S invocation-id}}
+                        :TableName                 (table-name ctx table)}))
+               request-id
+               (dynamodb/make-request
+                (assoc ctx :action "Query"
+                       :body (if breadcrumbs
+                               {:IndexName "request-id"
+                                :KeyConditionExpression "RequestId = :v1 AND Breadcrumbs = :v2"
+                                :ExpressionAttributeValues {":v1" {:S request-id}
+                                                            ":v2" {:S
+                                                                   (breadcrumb-str breadcrumbs)}}
+                                :TableName                 (table-name ctx table)}
+                               {:IndexName "request-id"
+                                :KeyConditionExpression "RequestId = :v1"
+                                :ExpressionAttributeValues {":v1" {:S request-id}}
+                                :TableName                 (table-name ctx table)})))
+               interaction-id
+               (dynamodb/make-request
+                (assoc ctx :action "Query"
+                       :body {:IndexName "interaction-id"
+                              :KeyConditionExpression "InteractionId = :v1"
+                              :ExpressionAttributeValues {":v1" {:S interaction-id}}
+                              :TableName
+                              (table-name ctx table)})))]
+    (mapv
+     data->response
+     (:Items resp))))
 
 (defmethod log-request
   :dynamodb
-  [ctx _]
-  ctx)
+  [ctx {:keys [request-id
+               breadcrumbs]
+        :as body}]
+  (let [breadcumbs (breadcrumb-str breadcrumbs)
+        body (if (= breadcrumbs [0])
+               body
+               {:ref (vec
+                      (drop-last breadcrumbs))})]
+    (dynamodb/make-request
+     (assoc ctx :action "BatchWriteItem"
+            :body
+            {:RequestItems
+             {(table-name ctx :request-log)
+              [{:PutRequest
+                {:Item      {:Id {:S (str request-id ":" breadcumbs)}
+                             :RequestId     {:S (:request-id ctx)}
+                             :Breadcrumbs   {:S (breadcrumb-str breadcumbs)}
+                             :InteractionId {:S (:interaction-id ctx)}
+                             :InvocationId  {:S (:invocation-id ctx)}
+                             :Data          {:S  (util/to-json body)}}}}]}}))))
+
+(defn update-request-log
+  [{:keys [request-id
+           breadcrumbs]
+    :as ctx}
+   _body
+   error]
+  (let [breadcumbs (breadcrumb-str breadcrumbs)]
+    (dynamodb/make-request
+     (assoc ctx :action "PutItem"
+            :body
+            {:TableName (table-name ctx :request-log)
+             :Item {:Id {:S (str request-id ":" breadcumbs)}
+                    :RequestId     {:S (:request-id ctx)}
+                    :Breadcrumbs   {:S (breadcrumb-str breadcumbs)}
+                    :InteractionId {:S (:interaction-id ctx)}
+                    :InvocationId  {:S (:invocation-id ctx)}
+                    :Error          {:S  (util/to-json error)}}}))))
 
 (defmethod log-request-error
   :dynamodb
-  [ctx _ _]
-  ctx)
+  [ctx body error]
+  (update-request-log ctx body error))
 
 (defmethod log-dps
   :dynamodb
@@ -66,44 +175,91 @@
   {:pre [(and request-id breadcrumbs)]}
   ctx)
 
+(defn query-identity
+  [ctx identity]
+  (let [single (string? identity)
+        values (if single
+                 [identity]
+                 (vec identity))
+        query-resp (mapv
+                    #(dynamodb/make-request
+                      (assoc ctx :action "Query"
+                             :body {:KeyConditionExpression "Id =  :v"
+                                    :ExpressionAttributeValues
+                                    {":v"
+                                     {:S (str
+                                          (name (:service-name ctx))
+                                          "/"
+                                          %)}}
+                                    :TableName (table-name ctx :identity-store)}))
+                    values)
+        query-resp (mapv
+                    #(get-in % [:Items 0 :AggregateId :S])
+                    query-resp)]
+
+    (if single
+      (first query-resp)
+      (reduce-kv
+       (fn [p idx v]
+
+         (if-not v
+           p
+           (assoc p
+                  (get values idx)
+                  v)))
+       {}
+       query-resp))))
+
 (defmethod get-aggregate-id-by-identity
   :dynamodb
   [{:keys [identity] :as ctx}]
-  (let [resp (dynamodb/make-request
-              (assoc ctx :action "GetItem"
-                     :body {:Key       {:Id
-                                        {:S (str
-                                             (name (:service-name ctx))
-                                             "/"
-                                             identity)}}
-                            :TableName (table-name ctx :identity-store)}))]
-    (get-in resp [:Item :AggregateId :S])))
+  (let [resp (cond
+               (nil? identity) nil
+               (and
+                (not
+                 (string? identity))
+                (not
+                 (seq identity))) {}
+               :else (query-identity ctx identity))]
+    resp))
 
 (defmethod get-events
   :dynamodb
-  [{:keys [id version]
+  [{:keys [id version
+           request-id
+           breadcrumbs
+           interaction-id
+           invocation-id]
     :as   ctx
     :or   {version 0}}]
-  (let [resp (dynamodb/make-request
-              (assoc ctx :action "Query"
-                     :body {:KeyConditions {:Id
-                                            {:AttributeValueList [{:S id}]
-                                             :ComparisonOperator "EQ"}
-                                            :EventSeq
-                                            {:AttributeValueList [{:N (str version)}]
-                                             :ComparisonOperator "GT"}}
-                            :TableName     (table-name ctx :event-store)}))]
-    (map
-     (fn [event]
-       (util/to-edn (get-in event [:Data :S])))
-     (get resp :Items []))))
+  (if id
+    (let [resp (dynamodb/make-request
+                (assoc ctx :action "Query"
+                       :body {:KeyConditions {:AggregateId
+                                              {:AttributeValueList [{:S id}]
+                                               :ComparisonOperator "EQ"}
+                                              :EventSeq
+                                              {:AttributeValueList [{:N (str version)}]
+                                               :ComparisonOperator "GT"}}
+                              :TableName     (table-name ctx :event-store)}))]
+      (map
+       (fn [event]
+         (util/to-edn (get-in event [:Data :S])))
+       (get resp :Items [])))
+    (analytic-query ctx
+                    :event-store
+                    (cond-> {}
+                      request-id (assoc :request-id request-id)
+                      breadcrumbs (assoc :breadcrumbs request-id)
+                      interaction-id (assoc :interaction-id request-id)
+                      invocation-id (assoc :invocation-id request-id)))))
 
 (defmethod get-max-event-seq
   :dynamodb
   [{:keys [id] :as ctx}]
   (let [resp (dynamodb/make-request
               (assoc ctx :action "Query"
-                     :body {:KeyConditions    {:Id
+                     :body {:KeyConditions    {:AggregateId
                                                {:AttributeValueList [{:S id}]
                                                 :ComparisonOperator "EQ"}}
                             :ScanIndexForward false
@@ -112,18 +268,28 @@
         event (first (get resp :Items []))]
     (Integer/parseInt (get-in event [:EventSeq :N] "0"))))
 
+(defn create-effect-id
+  [request-id breadcrumbs]
+  (str request-id
+       "-"
+       (breadcrumb-str
+        breadcrumbs)))
+
 (defmethod store-results
   :dynamodb
   [{:keys [resp] :as ctx}]
   (let [items (concat (map
                        (fn [event]
                          {:Put
-                          {:Item      {"Id"            {:S (:id event)}
+                          {:Item      {"AggregateId"   {:S (:id event)}
                                        "ItemType"      {:S :event}
                                        "Service"       {:S (keyword
                                                             (:service-name ctx))}
                                        "RequestId"     {:S (:request-id ctx)}
+                                       "Breadcrumbs"   {:S (breadcrumb-str
+                                                            (:breadcrumbs ctx))}
                                        "InteractionId" {:S (:interaction-id ctx)}
+                                       "InvocationId"  {:S (:invocation-id ctx)}
                                        "EventSeq"      {:N (str (:event-seq event))}
                                        "Data"          {:S (util/to-json event)}},
                            :ConditionExpression "attribute_not_exists(Id)"
@@ -132,13 +298,19 @@
                       (map
                        (fn [effect]
                          {:Put
-                          {:Item      {"Id"            {:S (uuid/gen)}
+                          {:Item      {"Id"            {:S
+                                                        (create-effect-id
+                                                         (:request-id ctx)
+                                                         (:breadcrumbs effect))}
                                        "ItemType"      {:S :effect}
                                        "Service"       {:S (keyword
                                                             (:service-name ctx))}
                                        "TargetService" {:S (:service effect)}
                                        "RequestId"     {:S (:request-id ctx)}
+                                       "Breadcrumbs"   {:S (breadcrumb-str
+                                                            (:breadcrumbs ctx))}
                                        "InteractionId" {:S (:interaction-id ctx)}
+                                       "InvocationId"  {:S (:invocation-id ctx)}
                                        "Data"          {:S (util/to-json (assoc effect
                                                                                 :request-id (:request-id ctx)
                                                                                 :interaction-id (:interaction-id ctx)))}},
@@ -148,21 +320,41 @@
                       (map
                        (fn [item]
                          {:Put
-                          {:Item      {"Id"            {:S (str
-                                                            (name
-                                                             (:service-name ctx))
-                                                            "/"
-                                                            (:identity item))}
+                          {:Item      {"Id" {:S (str
+                                                 (name
+                                                  (:service-name ctx))
+                                                 "/"
+                                                 (:identity item))}
                                        "ItemType"      {:S :identity}
                                        "Service"       {:S (keyword
                                                             (:service-name ctx))}
                                        "RequestId"     {:S (:request-id ctx)}
+                                       "Breadcrumbs"   {:S (breadcrumb-str
+                                                            (:breadcrumbs ctx))}
                                        "InteractionId" {:S (:interaction-id ctx)}
+                                       "InvocationId"  {:S (:invocation-id ctx)}
                                        "AggregateId"   {:S (:id item)}
                                        "Data"          {:S (util/to-json item)}},
                            :ConditionExpression "attribute_not_exists(Id)"
                            :TableName (table-name ctx :identity-store)}})
-                       (:identities resp)))]
+                       (:identities resp))
+                      [{:Put
+                        {:Item      {"Id"            {:S (str
+                                                          (:request-id ctx)
+                                                          ":"
+                                                          (breadcrumb-str
+                                                           (:breadcrumbs ctx)))}
+                                     "Service"       {:S (keyword
+                                                          (:service-name ctx))}
+                                     "RequestId"     {:S (:request-id ctx)}
+                                     "Breadcrumbs"   {:S (breadcrumb-str
+                                                          (:breadcrumbs ctx))}
+                                     "InteractionId" {:S (:interaction-id ctx)}
+                                     "InvocationId" {:S (:invocation-id ctx)}
+                                     "Data"          {:S (util/to-json
+                                                          (:summary resp))}},
+                         :ConditionExpression "attribute_not_exists(Id)"
+                         :TableName (table-name ctx :response-log)}}])]
     (when-not (empty? items)
       (dynamodb/make-request
        (assoc ctx :action "TransactWriteItems"

@@ -1,6 +1,7 @@
 (ns sdk.aws.s3-it
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.tools.logging :as log]
+            [sdk.aws.common :as common]
             [sdk.aws.s3 :as s3]
             [aws.ctx :as aws-ctx]
             [lambda.ctx :as lambda-ctx]
@@ -211,4 +212,5 @@
                  @atempt))
           (is (= nil
                  (s3/get-object ctx object))))))))
+
 

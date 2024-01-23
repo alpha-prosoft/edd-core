@@ -198,7 +198,7 @@
       (edd/with-stores
         ctx (fn [ctx]
               (is (= [{:error expected-error}]
-                     (mapv :error (event-store/get-request-log (with-realm ctx) request-id ""))))))
+                     (mapv :error (event-store/get-request-log (with-realm ctx) request-id "0"))))))
 
       (is (= {:exception      expected-error
               :invocation-id  core-mock/inocation-id-0

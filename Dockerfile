@@ -18,24 +18,14 @@ COPY --chown=build:build modules modules
 COPY --chown=build:build deps.edn deps.edn
 COPY --chown=build:build tests.edn tests.edn
 COPY --chown=build:build format.sh format.sh
-COPY --chown=build:build ansible ansible
+COPY --chown=build:build dynamodb dynamodb
+COPY --chown=build:build sql sql
 
 RUN ./format.sh check
 
-COPY --chown=build:build sql sql
-
-USER root
-
-
-RUN mkdir -p /home/jenkins
-RUN chown build:build /home/build -R &&\
-    chown build:build /home/jenkins -R &&\
-    chown build:build /dist -R
-
-
-USER build
-
 ARG BUILD_ID
+
+COPY --chown=build:build ansible ansible
 
 RUN set -e &&\
     echo "Org: ${ARTIFACT_ORG}" &&\
@@ -56,6 +46,7 @@ RUN set -e &&\
     export Region=$AWS_DEFAULT_REGION &&\
     export EnvironmentNameLower=pipeline &&\
     export DatabasePassword="no-secret" &&\
+    export EnvironmentNameUpper=PIPELINE &&\
     export HOST_IP="127.0.0.1" &&\
     export DatabaseEndpoint="$HOST_IP" &&\
     export IndexDomainEndpoint="$HOST_IP:9200" &&\
@@ -72,7 +63,7 @@ RUN set -e &&\
             -url=jdbc:postgresql://${DatabaseEndpoint}:5432/postgres?user=postgres \
             -locations="filesystem:${PWD}/sql/files/edd" migrate &&\
     echo "Run ansible stuff" &&\
-    ansible-playbook ansible/deploy/deploy.yaml &&\
+    ansible-playbook ansible/deploy/deploy.yml &&\
     echo "Building b${BUILD_ID}" &&\
     clj -M:jar  \
        --aot "clojure.java.io" \

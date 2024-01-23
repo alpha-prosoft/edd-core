@@ -64,7 +64,7 @@
                       e)))))
 
 (defn breadcrumb-str [breadcrumbs]
-  (str/join ":" (or breadcrumbs [])))
+  (str/join ":" (or breadcrumbs [0])))
 
 (defn store-event
   [ctx event]
