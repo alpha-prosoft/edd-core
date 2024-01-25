@@ -8,28 +8,28 @@
             [lambda.uuid :as uuid]
             [lambda.util :as util]))
 
+(defn get-bucket
+  [{:keys [aws] :as ctx}]
+  (str
+   (:account-id aws)
+   "-"
+   (:environment-name-lower ctx)
+   "-it"))
+
 (defn for-object
-  [key]
-  {:s3 {:bucket {:name (str
-                        (util/get-env
-                         "AccountId")
-                        "-"
-                        (util/get-env
-                         "EnvironmentNameLower")
-                        "-it")}
-        :object {:key key}}})
+  [ctx key]
+  (let [object {:s3 {:bucket {:name (get-bucket ctx)}
+                     :object {:key key}}}]
+    (log/info "Created object" object)
+    object))
 
 (defn for-object-with-content
-  [key content]
-  {:s3 {:bucket {:name (str
-                        (util/get-env
-                         "AccountId")
-                        "-"
-                        (util/get-env
-                         "EnvironmentNameLower")
-                        "-it")}
-        :object  {:key key
-                  :content content}}})
+  [ctx key content]
+  (let [object {:s3 {:bucket {:name (get-bucket ctx)}
+                     :object  {:key key
+                               :content content}}}]
+    (log/info "For object with content: " object)
+    object))
 
 (defn gen-key
   []
@@ -39,19 +39,19 @@
 
 (deftest test-s3-upload
   (let [ctx    (-> {}
-                   aws-ctx/init
+                   lambda-ctx/init
                    aws-ctx/init)]
     (testing "Testing happy path of put and get object"
       (let [key (gen-key)
             data "sample-data"]
-        (s3/put-object ctx (for-object-with-content key data))
+        (s3/put-object ctx (for-object-with-content ctx key data))
         (is (= data
                (slurp
-                (s3/get-object ctx (for-object-with-content key "sample-data")))))))
+                (s3/get-object ctx (for-object-with-content ctx key "sample-data")))))))
 
     (testing "Delete getting missing object"
       (let [key (gen-key)
-            object (for-object key)]
+            object (for-object ctx key)]
         (is (= nil
                (s3/get-object ctx object)))))
 
@@ -67,12 +67,12 @@
                                             {:body (char-array data)
                                              :status 503}
                                             (original-function url request :raw raw)))]
-          (s3/put-object ctx (for-object-with-content key data)))
+          (s3/put-object ctx (for-object-with-content ctx key data)))
         (is (= 2
                @atempt))
         (is (= data
                (slurp
-                (s3/get-object ctx (for-object-with-content key "sample-data")))))))
+                (s3/get-object ctx (for-object-with-content ctx key "sample-data")))))))
 
     (testing "Testing when there is error getting-object-from s3"
       (let [key (gen-key)
@@ -88,8 +88,8 @@
                                             {:body (char-array data)
                                              :status 503}
                                             (original-function url request :raw raw)))]
-          (s3/put-object ctx (for-object-with-content key data))
-          (let [resp (s3/get-object ctx (for-object-with-content key "sample-data"))]
+          (s3/put-object ctx (for-object-with-content ctx key data))
+          (let [resp (s3/get-object ctx (for-object-with-content ctx key "sample-data"))]
             (is (= 2
                    @atempt))
             (is (= data
@@ -102,7 +102,7 @@
     (testing "Testing happy path of put and get object tags"
       (let [key (gen-key)
             data "sample-data"
-            object (for-object key)
+            object (for-object ctx key)
             tags [{:key "testkey"
                    :value "testvalue"}]]
 
@@ -114,14 +114,14 @@
 
     (testing "Delete getting missing tagged"
       (let [key (gen-key)
-            object (for-object key)]
+            object (for-object ctx key)]
         (is (= nil
                (s3/get-object-tagging ctx object)))))
 
     (testing "Testing when there is error putting tags"
       (let [key (gen-key)
             data "sample-data"
-            object (for-object key)
+            object (for-object ctx key)
             tags [{:key "testkey"
                    :value "testvalue"}]
             atempt (atom 0)
@@ -145,7 +145,7 @@
     (testing "Testing when there is error getting tags"
       (let [key (gen-key)
             data "sample-data"
-            object (for-object key)
+            object (for-object ctx key)
             tags [{:key "testkey"
                    :value "testvalue"}]
             atempt (atom 0)
@@ -175,7 +175,7 @@
     (testing "Testing happy path of put and delete"
       (let [key (gen-key)
             data "sample-data"
-            object (for-object key)]
+            object (for-object ctx key)]
 
         (s3/put-object ctx (assoc-in object [:s3 :object :content] data))
         (is (= data
@@ -186,14 +186,14 @@
 
     (testing "Delete missing object"
       (let [key (gen-key)
-            object (for-object key)]
+            object (for-object ctx key)]
         (is (= nil
                (s3/get-object ctx object)))))
 
     (testing "Testing when there is error deleteing"
       (let [key (gen-key)
             data "sample-data"
-            object (for-object key)
+            object (for-object ctx key)
             atempt (atom 0)
             original-function util/http-request]
 

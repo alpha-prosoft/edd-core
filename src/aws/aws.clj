@@ -5,6 +5,7 @@
    [lambda.request :as request]
    [sdk.aws.common :as common]
    [clojure.set :as clojure-set]
+   [clojure.string :as string]
    [sdk.aws.cognito-idp :as cognito-idp]
    [sdk.aws.sqs :as sqs]))
 
@@ -27,16 +28,20 @@
    :headers    {"Content-Type" "application/json"}})
 
 (defn enqueue-response
-  [ctx _]
+  [{:keys [environment-name-lower]
+    :as ctx}
+   _]
   (let [resp (get @request/*request* :cache-keys)]
     (when resp
       (log/info "Distributing response")
       (doall
        (map
-        #(let [{:keys [error]} (sqs/sqs-publish
-                                (assoc ctx :queue "glms-router-svc-response"
-                                       :message (util/to-json
-                                                 {:Records [%]})))]
+        #(let [{:keys [error]}
+               (sqs/sqs-publish
+                (assoc ctx
+                       :queue (str  environment-name-lower "-router-svc-response")
+                       :message (util/to-json
+                                 {:Records [%]})))]
            (when error
              (throw (ex-info "Distribution failed" error))))
         (flatten resp))))))
@@ -73,21 +78,25 @@
                  "error")]
     (print "Sensing error")
     (when-not from-api
-      (let [items-to-delete (reduce
-                             (fn [items [response record]]
-                               (if (and (not (:exception response))
-                                        (= (:eventSource record) "aws:sqs"))
-                                 (conj items record)
-                                 items))
-                             []
-                             (->> (interleave
-                                   body
-                                   (:Records request))
-                                  (partition 2)))]
+      (let [items (interleave body
+                              (:Records request))
+            items-to-delete (->> (partition 2 items)
+                                 (filter (fn [[a _]]
+                                           (not (:exception a))))
+                                 (map
+                                  (fn [[_ b]]
+                                    b)))]
         (when (and (> (count items-to-delete) 0)
                    (= (count body)
                       (count (:Records request))))
-          (sqs/delete-message-batch ctx items-to-delete))))
+          (let [queue (-> items-to-delete
+                          first
+                          :eventSourceARN
+                          (string/split #":")
+                          last)]
+            (sqs/delete-message-batch (assoc ctx
+                                             :queue queue
+                                             :messages items-to-delete))))))
 
     (util/d-time "Enqueueing error"
                  (enqueue-response ctx body))

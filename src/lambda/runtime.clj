@@ -54,7 +54,7 @@
                          filters
                          invocation-id
                          send-response]}]
-  (println "Handling request")
+  (log/info "Handling request")
   (when-not (bound? #'util/*cache*)
     (throw (ex-info "*cache* is not bound"
                     {:message "*cache* is not bound. Runtime is responsible

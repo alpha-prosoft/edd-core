@@ -37,7 +37,6 @@
                     "-"
                     (name table)
                     "-ddb")]
-    (println "Table name")
     table-name))
 
 (defn data->response
@@ -232,27 +231,35 @@
            invocation-id]
     :as   ctx
     :or   {version 0}}]
+  (log/info (format "Fetching events for: %s, starting version: %s"
+                    id version))
   (if id
-    (let [resp (dynamodb/make-request
-                (assoc ctx :action "Query"
-                       :body {:KeyConditions {:AggregateId
-                                              {:AttributeValueList [{:S id}]
-                                               :ComparisonOperator "EQ"}
-                                              :EventSeq
-                                              {:AttributeValueList [{:N (str version)}]
-                                               :ComparisonOperator "GT"}}
-                              :TableName     (table-name ctx :event-store)}))]
-      (map
-       (fn [event]
-         (util/to-edn (get-in event [:Data :S])))
-       (get resp :Items [])))
-    (analytic-query ctx
-                    :event-store
-                    (cond-> {}
-                      request-id (assoc :request-id request-id)
-                      breadcrumbs (assoc :breadcrumbs request-id)
-                      interaction-id (assoc :interaction-id request-id)
-                      invocation-id (assoc :invocation-id request-id)))))
+    (do
+      (log/info "Fetching by id")
+      (let [resp (dynamodb/make-request
+                  (assoc ctx :action "Query"
+                         :body {:KeyConditions {:AggregateId
+                                                {:AttributeValueList [{:S id}]
+                                                 :ComparisonOperator "EQ"}
+                                                :EventSeq
+                                                {:AttributeValueList [{:N (str version)}]
+                                                 :ComparisonOperator "GT"}}
+                                :TableName     (table-name ctx :event-store)}))
+            events (map
+                    (fn [event]
+                      (util/to-edn (get-in event [:Data :S])))
+                    (get resp :Items []))]
+
+        (log/info (format "Received events: %s" (count events)))
+        events))
+    (do "Fetching by request data"
+        (analytic-query ctx
+                        :event-store
+                        (cond-> {}
+                          request-id (assoc :request-id request-id)
+                          breadcrumbs (assoc :breadcrumbs request-id)
+                          interaction-id (assoc :interaction-id request-id)
+                          invocation-id (assoc :invocation-id request-id))))))
 
 (defmethod get-max-event-seq
   :dynamodb

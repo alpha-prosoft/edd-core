@@ -87,7 +87,7 @@
    "S3 Requests can be forwarded to SQS queue and then they are double wrapped"
     (with-redefs [common/create-date (fn [] "20200426T061823Z")
                   aws/enqueue-response (fn [_ctx _msg])
-                  sqs/delete-message-batch (fn [_ctx _msg])]
+                  sqs/delete-message-batch (fn [_ctx])]
       (let [key (str "test/2021-12-27/"
                      interaction-id
                      "/"

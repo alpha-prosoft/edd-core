@@ -44,6 +44,7 @@
 
 (def ctx
   (-> mock/ctx
+      (assoc :aws {:account-id "11111111111"})
       (edd/reg-cmd :cmd-1 (fn [_ctx cmd]
                             {:id       (:id cmd)
                              :event-id :event-1
@@ -354,3 +355,6 @@
              (map
               #(util/to-edn %)
               @messages))))))
+
+
+

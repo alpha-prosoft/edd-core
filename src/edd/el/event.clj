@@ -47,7 +47,7 @@
 (defn get-current-state
   [{:keys [id events snapshot] :as ctx}]
   {:pre [id events]}
-  (log/debug "Updating aggregates" id)
+  (log/info "Calculating current state for:" id)
   (log/debug "Events: " events)
   (log/debug "Snapshot: " snapshot)
 
@@ -55,10 +55,15 @@
     (:error events) (throw (ex-info "Error fetching events" {:error events}))
     (> (count events) 0) (let [aggregate (create-aggregate snapshot events (:def-apply ctx))
                                result-agg (apply-agg-filter ctx aggregate)]
+                           (log/info (format "New aggragate version: %s"
+                                             (:version result-agg)))
                            (assoc
                             ctx
                             :aggregate result-agg))
-    snapshot (assoc ctx :aggregate snapshot)
+    snapshot (do
+               (log/info (format "No new events to taking snapshot: %s"
+                                 (:version snapshot)))
+               (assoc ctx :aggregate snapshot))
     :else (assoc ctx :aggregate nil)))
 
 (defn fetch-snapshot
@@ -93,9 +98,14 @@
           (get-current-state)))))
 
 (defn update-aggregate
-  [ctx]
-  (if (:aggregate ctx)
-    (view-store/update-snapshot ctx (:aggregate ctx))
+  [{:keys [aggregate]
+    :as ctx}]
+  (if aggregate
+    (do
+      (log/info (format "Updating aggregate id: %s, to version %s"
+                        (:id aggregate)
+                        (:version aggregate)))
+      (view-store/update-snapshot ctx (:aggregate ctx)))
     ctx))
 
 (defn handle-event

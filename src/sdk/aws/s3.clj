@@ -321,5 +321,4 @@
                          host
                          path
                          query))]
-    (println url)
     url))

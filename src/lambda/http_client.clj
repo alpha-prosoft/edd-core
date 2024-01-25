@@ -1,6 +1,7 @@
 (ns lambda.http-client
   (:require [clojure.tools.logging :as log]
-            [lambda.util :as util]))
+            [lambda.util :as util]
+            [clojure.set :as clojure-set]))
 
 (def retry-count 5)
 (defn request->with-timeouts
@@ -38,7 +39,9 @@
     (let [response (try
                      (apply f [attempt])
                      (catch Exception e
-                       (util/try->error e)))]
+                       (clojure-set/rename-keys
+                        (util/exception->response e)
+                        {:exception :error})))]
       (if (:error response)
         (do
           (log/warn (str "Retrying " (- total attempt) "/" total) (:error response))

@@ -376,7 +376,7 @@
                                 account-id
                                 "/"
                                 environment-name-lower
-                                "-glms-router-svc-response")
+                                "-router-svc-response")
                       :response {:body "{}"}}]}
          (runtime/lambda-requests
           ctx
@@ -420,7 +420,7 @@
                                                      account-id
                                                      "/"
                                                      environment-name-lower
-                                                     "-glms-router-svc-response")
+                                                     "-router-svc-response")
                                :version         :http1.1}
 
                               {:body   {:error          "Timeout"

@@ -44,9 +44,10 @@
   [ctx aggregate]
   (let [storage (get-in ctx [:view-store :config :storage])
         object (-> storage
-
                    (assoc-in [:s3 :object :key]
                              (get-key ctx (:id aggregate))))
+
+        _ (log/info "Updating aggregate ob S3 bucket: " object)
         {:keys [error]} (s3/put-object ctx
                                        (-> object
                                            (assoc-in [:s3 :object :content]
