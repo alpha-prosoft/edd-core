@@ -19,8 +19,10 @@
    [lambda.uuid :as uuid]
    [clojure.string :as string]))
 
+(def breadcrumbs-separator ":")
+
 (defn breadcrumb-str [breadcrumbs]
-  (string/join ":" (or breadcrumbs [0])))
+  (string/join  breadcrumbs-separator (or breadcrumbs [0])))
 
 (defn table-name
   [ctx table]
@@ -50,7 +52,11 @@
            AggregateId]}]
   (cond-> {}
     RequestId (assoc :request-id (:S RequestId))
-    Breadcrumbs (assoc :breadcrumbs (:S Breadcrumbs))
+    Breadcrumbs (assoc :breadcrumbs (mapv
+                                     #(Integer/parseInt %)
+                                     (string/split
+                                      (:S Breadcrumbs)
+                                      (re-pattern breadcrumbs-separator))))
     InvocationId  (assoc :invocation-id (:S InvocationId))
     InteractionId (assoc :interaction-id (:S InteractionId))
     Data (assoc :data (util/to-edn (:S Data)))
@@ -105,7 +111,7 @@
   [ctx {:keys [request-id
                breadcrumbs]
         :as body}]
-  (let [breadcumbs (breadcrumb-str breadcrumbs)
+  (let [breadcrumbs-string (breadcrumb-str breadcrumbs)
         body (if (= breadcrumbs [0])
                body
                {:ref (vec
@@ -116,9 +122,9 @@
             {:RequestItems
              {(table-name ctx :request-log)
               [{:PutRequest
-                {:Item      {:Id {:S (str request-id ":" breadcumbs)}
+                {:Item      {:Id {:S (str request-id ":" breadcrumbs-string)}
                              :RequestId     {:S (:request-id ctx)}
-                             :Breadcrumbs   {:S (breadcrumb-str breadcumbs)}
+                             :Breadcrumbs   {:S breadcrumbs-string}
                              :InteractionId {:S (:interaction-id ctx)}
                              :InvocationId  {:S (:invocation-id ctx)}
                              :Data          {:S  (util/to-json body)}}}}]}}))))
@@ -235,23 +241,24 @@
                     id version))
   (if id
     (do
-      (log/info "Fetching by id")
-      (let [resp (dynamodb/make-request
-                  (assoc ctx :action "Query"
-                         :body {:KeyConditions {:AggregateId
-                                                {:AttributeValueList [{:S id}]
-                                                 :ComparisonOperator "EQ"}
-                                                :EventSeq
-                                                {:AttributeValueList [{:N (str version)}]
-                                                 :ComparisonOperator "GT"}}
-                                :TableName     (table-name ctx :event-store)}))
-            events (map
-                    (fn [event]
-                      (util/to-edn (get-in event [:Data :S])))
-                    (get resp :Items []))]
+      (util/d-time
+       (format "Fetching events for: %s, starting version: %s" id version)
+       (let [resp (dynamodb/make-request
+                   (assoc ctx :action "Query"
+                          :body {:KeyConditions {:AggregateId
+                                                 {:AttributeValueList [{:S id}]
+                                                  :ComparisonOperator "EQ"}
+                                                 :EventSeq
+                                                 {:AttributeValueList [{:N (str version)}]
+                                                  :ComparisonOperator "GT"}}
+                                 :TableName     (table-name ctx :event-store)}))
+             events (map
+                     (fn [event]
+                       (util/to-edn (get-in event [:Data :S])))
+                     (get resp :Items []))]
 
-        (log/info (format "Received events: %s" (count events)))
-        events))
+         (log/info (format "Received events: %s" (count events)))
+         events)))
     (do "Fetching by request data"
         (analytic-query ctx
                         :event-store

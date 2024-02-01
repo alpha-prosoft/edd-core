@@ -98,8 +98,9 @@
                                            :ChallengeParameters {}})}}]
        (is (= id-token
               (aws/get-token ctx)))
-        ;When this test fails on Wed Mar 13 2024 16:49:19 i expect Beer
-       (with-redefs [util/get-current-time-ms (fn [] 1710348559351)]
+        ; When this test fails on Mon Jun 01 2026 21:15:59 GMT+0000 i expect Beer
+        ; Please just bump timestamp and subscribe your self for next Beer
+       (with-redefs [util/get-current-time-ms (fn [] 1720348559351)]
          (is (= id-token
                 (aws/get-token ctx))))
        (is (= [login-request
