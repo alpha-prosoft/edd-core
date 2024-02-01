@@ -16,7 +16,9 @@
            (clojure.lang Keyword)
            (com.fasterxml.jackson.databind ObjectMapper)
            (java.nio.charset Charset)
-           (java.net URLEncoder)))
+           (java.net URLEncoder)
+           (java.security MessageDigest)
+           (java.math BigInteger)))
 
 (def offset-date-time-format "yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
 
@@ -181,6 +183,11 @@
   (.encodeToString (Base64/getEncoder)
                    (.getBytes to-encode "UTF-8")))
 
+(defn bytes->base64encode
+  [to-encode]
+  (.encodeToString (Base64/getEncoder)
+                   to-encode))
+
 (defn base64decode
   [^String to-decode]
   (String. (.decode
@@ -285,3 +292,31 @@
     (when (not= startup-milis 0)
       (log/info "Server started: " (- (System/currentTimeMillis)
                                       startup-milis)))))
+
+(defn md5hadh [^String s]
+  (let [algorithm (MessageDigest/getInstance "MD5")
+        raw (.digest algorithm (.getBytes s))]
+    (format "%032x" (BigInteger. 1 raw))))
+
+(defn string->md5base64 [^String s]
+  (let [algorithm (MessageDigest/getInstance "MD5")
+        raw (.digest algorithm (.getBytes s))]
+    (bytes->base64encode raw)))
+
+(defn slurp-bytes
+  "Slurp the bytes from a slurpable thing"
+  [^String x]
+  (with-open [out (java.io.ByteArrayOutputStream.)]
+    (with-open [file (clojure.java.io/input-stream x)]
+      (clojure.java.io/copy file out))
+    (.toByteArray out)))
+
+(defn path->md5base64 [^String path]
+  (let [algorithm (MessageDigest/getInstance "MD5")
+        raw (.digest algorithm  (slurp-bytes path))]
+    (bytes->base64encode raw)))
+
+(defn sha256 [^String s]
+  (let [algorithm (MessageDigest/getInstance "MD5")
+        raw (.digest algorithm (.getBytes s))]
+    (format "%032x" (BigInteger. 1 raw))))

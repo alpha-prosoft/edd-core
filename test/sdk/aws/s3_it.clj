@@ -1,6 +1,8 @@
 (ns sdk.aws.s3-it
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.tools.logging :as log]
+            [clojure.string :as string]
+            [clojure.java.io :as io]
             [sdk.aws.common :as common]
             [sdk.aws.s3 :as s3]
             [aws.ctx :as aws-ctx]
@@ -213,4 +215,170 @@
           (is (= nil
                  (s3/get-object ctx object))))))))
 
+(defn get-aws-ctx
+  []
+  (-> {}
+      lambda-ctx/init
+      aws-ctx/init))
 
+(deftest test-s3-upload-presigned-url
+  (testing "Test s3 upload with pre-signed url"
+    (let [ctx (get-aws-ctx)
+          timeout 5000
+          key (gen-key)
+          data "sample-data"
+          file (.getAbsolutePath
+                (java.io.File/createTempFile "hello" ".txt"))
+          _ (spit file data)
+          md5 (util/path->md5base64 file)
+          url (s3/presigned-url ctx {:method "PUT"
+                                     :expires "360"
+                                     :md5 md5
+                                     :object (for-object ctx key)})
+
+          wrong-file (.getAbsolutePath
+                      (java.io.File/createTempFile "hello" ".txt"))
+          _ (spit wrong-file "wrong data")
+
+          resp (util/http-request url
+                                  {:method :put
+                                   :timeout timeout
+                                   :headers {"Content-MD5" md5}
+                                   :body (util/slurp-bytes file)}
+                                  :raw true)
+          fail-resp (util/http-request url
+                                       {:method :put
+                                        :timeout timeout
+                                        :headers {"Content-MD5" md5}
+                                        :body (util/slurp-bytes wrong-file)}
+                                       :raw true)]
+
+      (is (= 200
+             (:status resp)))
+
+      (is (= 400
+             (:status fail-resp)))
+
+      (is (string/includes?
+           (:body fail-resp)
+           "BadDigest"))
+
+      (is (= data
+             (slurp
+              (s3/get-object ctx (for-object ctx key)))))
+
+      (testing "With content-length"
+        (let [long-key (gen-key)
+              long-data "this is at least 10 characters long"
+              long-file (.getAbsolutePath
+                         (java.io.File/createTempFile "hello" ".txt"))
+              _ (spit long-file long-data)
+              long-md5 (util/path->md5base64 long-file)
+              long-content-length 35    ;  (alength long-bytes)
+
+                                        ;_ (log/infof "Content length: %s" long-content-length)
+              _ (println long-md5)]
+          (is (= 35
+                 long-content-length))
+          (testing "All good"
+            (let [long-url (s3/presigned-url ctx {:method "PUT"
+                                                  :expires "360"
+                                                  :md5 long-md5
+                                        ;:content-length long-content-length
+                                                  :object (for-object ctx long-key)})
+                  _ (println (str "curl -XPUT '"
+                                  long-url
+                                  "' -H \"Content-MD5: $(openssl dgst -md5 -binary "
+                                  long-file
+                                  " | openssl enc -base64)\" -d @" long-file))
+                  resp (util/http-request long-url
+                                          {:method :put
+                                           :timeout timeout
+                                           :headers {"Content-MD5" long-md5}
+                                           :body (util/slurp-bytes long-file)}
+                                          :raw true)]
+
+              (println resp)
+              (is (= 200
+                     (:status resp)))))
+
+          #_(testing "Change content length when signing"
+              (let [long-url (s3/presigned-url ctx {:method "PUT"
+                                                    :expires "360"
+                                                    :md5 long-md5
+                                                    :content-length 10
+                                                    :object (for-object ctx long-key)})
+                    _ (println (str "curl -XPUT '"
+                                    long-url
+                                    "' -H \"Content-MD5: $(openssl dgst -md5 -binary "
+                                    long-file
+                                    " | openssl enc -base64)\" -d @" long-file))
+                    resp (util/http-request long-url
+                                            {:method :put
+                                             :timeout timeout
+                                             :headers {"Content-MD5" long-md5
+                                                       "Content-Length" 10}
+                                             :body (util/slurp-bytes long-file)}
+                                            :raw true)]
+                (println resp)
+                (is (= 403
+                       (:status resp))))))))))
+
+(deftest test-s3-with-content-length
+  (testing "With content-length"
+    (let [ctx (get-aws-ctx)
+          timeout 5000
+          long-key (gen-key)
+          long-data "this is at least 10 characters long"
+          long-file (.getAbsolutePath
+                     (java.io.File/createTempFile "hello" ".txt"))
+          _ (spit long-file long-data)
+          long-md5 (util/path->md5base64 long-file)
+          long-content-length 35    ;  (alength long-bytes)
+
+                                        ;_ (log/infof "Content length: %s" long-content-length)
+          _ (println long-md5)]
+      (is (= 35
+             long-content-length))
+      (testing "All good"
+        (let [long-url (s3/presigned-url ctx {:method "PUT"
+                                              :expires "360"
+                                              :md5 long-md5
+                                              :content-length long-content-length
+                                              :object (for-object ctx long-key)})
+              _ (println (str "curl -XPUT '"
+                              long-url
+                              "' -H \"Content-MD5: $(openssl dgst -md5 -binary "
+                              long-file
+                              " | openssl enc -base64)\" -d @" long-file))
+              resp (util/http-request long-url
+                                      {:method :put
+                                       :timeout timeout
+                                       :headers {"Content-MD5" long-md5}
+                                       :body (util/slurp-bytes long-file)}
+                                      :raw true)]
+
+          (is (= 200
+                 (:status resp)))))
+
+      (testing "Wrong length when signing"
+        (let [long-url (s3/presigned-url ctx {:method "PUT"
+                                              :expires "360"
+                                              :md5 long-md5
+                                              :content-length 10
+                                              :object (for-object ctx long-key)})
+              _ (println (str "curl -XPUT '"
+                              long-url
+                              "' -H \"Content-MD5: $(openssl dgst -md5 -binary "
+                              long-file
+                              " | openssl enc -base64)\" -d @" long-file))
+              resp (util/http-request long-url
+                                      {:method :put
+                                       :timeout timeout
+                                       :headers {"Content-MD5" long-md5
+                                                 "Content-Length:" 10}
+                                       :body (util/slurp-bytes long-file)}
+                                      :raw true)]
+
+          (is (= 400
+                 (:status resp))))))))

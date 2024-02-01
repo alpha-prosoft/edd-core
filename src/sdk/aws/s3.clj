@@ -271,7 +271,7 @@
 
 (defn presigned-url
   [{:keys [aws debug] :as ctx}
-   {:keys [object method expires]
+   {:keys [object method expires md5 content-length]
     :or {method "GET"}}]
   (let [host (str (get-in object [:s3 :bucket :name])
                   ".s3."
@@ -279,6 +279,10 @@
                   ".amazonaws.com")
         path (str "/" (get-in object [:s3 :object :key]))
         date (common/create-date)
+        headers {"Host" host}
+        headers (cond-> headers
+                  md5 (assoc "Content-MD5" md5)
+                  content-length (assoc "Content-Length" (str content-length)))
         query [["X-Amz-Algorithm" "AWS4-HMAC-SHA256"]
                ["X-Amz-Credential" (str
                                     (:aws-access-key-id aws)
@@ -291,20 +295,25 @@
                ["X-Amz-Expires" (str expires)]
                ["X-Amz-Date" (common/create-date)]
                ["X-Amz-Security-Token" (get-aws-token ctx)]
-               ["X-Amz-SignedHeaders" "host"]
-               #_["X-amz-Content-MD5" md5]]
+               ["X-Amz-SignedHeaders" (->> headers
+                                           keys
+                                           sort
+                                           (map string/lower-case)
+                                           (string/join ";"))]]
         req {:method     method
              :uri        path
              :query      query
-             :headers    {"Host" host}
+             :headers    headers
              :service    "s3"
+             :payload    "UNSIGNED-PAYLOAD"
              :region     (:region aws)
              :access-key (:aws-access-key-id aws)
              :secret-key (:aws-secret-access-key aws)}
+
         auth (common/authorize (assoc req
-                                      :payload "UNSIGNED-PAYLOAD"
                                       :date date
                                       :debug debug))
+
         [_credential _headers signature] (string/split auth #"[,][ ]")
         signature (-> signature
                       (string/split #"=")
