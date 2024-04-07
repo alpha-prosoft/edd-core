@@ -112,7 +112,7 @@
                breadcrumbs]
         :as body}]
   (let [breadcrumbs-string (breadcrumb-str breadcrumbs)
-        body (if (= breadcrumbs [0])
+        body (if (<= (count breadcrumbs) 1)
                body
                {:ref (vec
                       (drop-last breadcrumbs))})]
