@@ -319,7 +319,8 @@
                  (not (zero? n)))
           (do
             (log/warn (str "Failed handling attempt: " n) e)
-            (Thread/sleep (+ 1000 (rand-int 1000)))
+            (util/thread-sleep (+ 1000 (rand-int 1000)))
+
             (retry f (dec n)))
           (throw e))))))
 

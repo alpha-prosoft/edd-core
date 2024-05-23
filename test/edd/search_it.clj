@@ -81,7 +81,7 @@
                           error)))
         (log/info "Index creation response: " body))
       (load-data el-ctx)
-      (Thread/sleep 2000)
+      (util/thread-sleep 2000)
       (let [{:keys [error] :as body} (el/query
                                       {:config (get-in el-ctx [:view-store :config])
                                        :method "GET"

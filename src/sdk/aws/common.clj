@@ -1,10 +1,12 @@
 (ns sdk.aws.common
   (:require
    [clj-aws-sign.core :as awssign]
-   [clojure.tools.logging :as log])
+   [clojure.tools.logging :as log]
+   [lambda.util :as util])
 
-  (:import (java.time.format DateTimeFormatter)
-           (java.time OffsetDateTime ZoneOffset)))
+  (:import
+   (java.time OffsetDateTime ZoneOffset)
+   (java.time.format DateTimeFormatter)))
 
 (def ^:dynamic retry-count)
 
@@ -16,7 +18,7 @@
     (let [{:keys [error] :as response} (f)]
       (if error
         (do (log/warn (str "Failed handling attempt: " n) error)
-            (Thread/sleep (+ 1000 (rand-int 1000)))
+            (util/thread-sleep (+ 1000 (rand-int 1000)))
             (retry f (dec n) response))
         response))))
 

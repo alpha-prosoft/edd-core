@@ -30,7 +30,8 @@ COPY --chown=build:build ansible ansible
 RUN set -e &&\
     echo "Org: ${ARTIFACT_ORG}" &&\
     clj -M:test:unit &&\
-    export AWS_DEFAULT_REGION=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region) &&\
+    SESSION_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600") &&\
+    export AWS_DEFAULT_REGION=$(curl -s -H "X-aws-ec2-metadata-token: $SESSION_TOKEN" http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region) &&\
     export AWS_REGION=$AWS_DEFAULT_REGION &&\
     TARGET_ACCOUNT_ID="$(aws sts get-caller-identity | jq -r '.Account')" &&\
     cred=$(aws sts assume-role \

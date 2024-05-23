@@ -47,7 +47,7 @@
           (log/warn (str "Retrying " (- total attempt) "/" total) (:error response))
           (when (not= attempt total)
             ;sleep only when second attempt
-            (Thread/sleep (+ 1000 (rand-int 1000))))
+            (util/thread-sleep (+ 1000 (rand-int 1000))))
           (retry-n-impl f (dec attempt) total response meta))
         response))))
 
