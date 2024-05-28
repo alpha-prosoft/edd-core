@@ -1,41 +1,66 @@
 (ns lambda.util
-  (:require [jsonista.core :as json]
-            [clojure.tools.logging :as log]
-            [org.httpkit.client :as http]
-            [clojure.java.io :as io]
-            [clojure.string :as str]
-            [clojure.set :as clojure-set]
-            [lambda.aes :as aes])
-  (:import (java.time OffsetDateTime)
-           (java.time.format DateTimeFormatter)
-           (java.io File BufferedReader)
-           (java.util UUID Date Base64)
-           (javax.crypto Mac)
-           (javax.crypto.spec SecretKeySpec)
-           (com.fasterxml.jackson.core JsonGenerator)
-           (clojure.lang Keyword)
-           (com.fasterxml.jackson.databind ObjectMapper)
-           (java.nio.charset Charset)
-           (java.net URLEncoder)
-           (java.security MessageDigest)
-           (java.math BigInteger)))
+  (:require
+   [clojure.java.io :as io]
+   [clojure.set :as clojure-set]
+   [clojure.string :as str]
+   [clojure.tools.logging :as log]
+   [jsonista.core :as json]
+   [lambda.aes :as aes]
+   [org.httpkit.client :as http])
+  (:import
+   (clojure.lang Keyword)
+   (com.fasterxml.jackson.core JsonGenerator)
+   (com.fasterxml.jackson.databind ObjectMapper)
+   (com.fasterxml.jackson.databind.module SimpleModule)
+   (java.io BufferedReader File)
+   (java.math BigInteger)
+   (java.net URLEncoder)
+   (java.nio.charset Charset)
+   (java.nio.charset StandardCharsets)
+   (java.security MessageDigest)
+   (java.time OffsetDateTime)
+   (java.time.format DateTimeFormatter)
+   (java.util Base64 Date UUID)
+   (javax.crypto Mac)
+   (javax.crypto.spec SecretKeySpec)
+   (jsonista.jackson FunctionalUUIDKeySerializer)))
+
+(set! *warn-on-reflection* true)
+(set! *unchecked-math* :warn-on-boxed)
 
 (def offset-date-time-format "yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
 
+(defn decode-json-special
+  [^String v]
+  (case (first v)
+    \: (if (str/starts-with? v "::")
+         (subs v 1)
+         (keyword (subs v 1)))
+    \# (if (str/starts-with? v "##")
+         (subs v 1)
+         (UUID/fromString (subs v 1)))
+    v))
+
+(def edd-core-module
+  (doto (SimpleModule. "EddCore")
+    (.addKeySerializer
+     UUID
+     (FunctionalUUIDKeySerializer. (partial str "#")))))
+
 (def ^ObjectMapper json-mapper
   (json/object-mapper
-   {:decode-key-fn true
+   {:modules [edd-core-module]
+    :decode-key-fn
+    (fn [v]
+      (case (first v)
+        \# (if (str/starts-with? v "##")
+             (subs v 1)
+             (UUID/fromString (subs v 1)))
+        (keyword v)))
     :decode-fn
     (fn [v]
       (condp instance? v
-        String (case (first v)
-                 \: (if (str/starts-with? v "::")
-                      (subs v 1)
-                      (keyword (subs v 1)))
-                 \# (if (str/starts-with? v "##")
-                      (subs v 1)
-                      (UUID/fromString (subs v 1)))
-                 v)
+        String (decode-json-special v)
         v))
     :encoders      {String         (fn [^String v ^JsonGenerator jg]
                                      (cond
@@ -52,12 +77,16 @@
                                      (.writeString jg (str ":" (name v))))}}))
 
 (defn date-time
-  ([] (OffsetDateTime/now))
-  ([^String value] (OffsetDateTime/parse value)))
+  (^OffsetDateTime [] (OffsetDateTime/now))
+  (^OffsetDateTime [^String value] (OffsetDateTime/parse value)))
 
 (defn date->string
-  ([] (.format (date-time) (DateTimeFormatter/ofPattern offset-date-time-format)))
-  ([^OffsetDateTime date] (.format date (DateTimeFormatter/ofPattern offset-date-time-format))))
+  ([]
+   (.format (date-time)
+            (DateTimeFormatter/ofPattern offset-date-time-format)))
+  ([^OffsetDateTime date]
+   (.format date
+            (DateTimeFormatter/ofPattern offset-date-time-format))))
 
 (defn get-current-time-ms
   []
@@ -130,7 +159,7 @@
   (str/replace value "\"" "\\\""))
 
 (defn decrypt
-  [body name]
+  [body ^String name]
   (log/debug "Decrypting")
   (let [context (get-env "ConfigurationContext")]
     (if (and context
@@ -246,7 +275,7 @@
        ret#)))
 
 (defn exception->response
-  [e]
+  [^Exception e]
   (let [data (ex-data e)]
     (if data
       (if (:exception data)
