@@ -10,6 +10,7 @@ services:
       - cluster.initial_master_nodes=opensearch-node1
       - bootstrap.memory_lock=true # along with the memlock settings below, disables swapping
       - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m" # minimum and maximum Java heap size, recommend setting both to 50% of system RAM
+      - "DISABLE_SECURITY_PLUGIN=true" # disables security plugin
     ulimits:
       memlock:
         soft: -1
@@ -22,6 +23,7 @@ services:
       - 9600:9600 # required for Performance Analyzer
     networks:
       - opensearch-net
+
   opensearch-dashboards:
     image: opensearchproject/opensearch-dashboards:1.2.0
     container_name: opensearch-dashboards
@@ -30,12 +32,14 @@ services:
     expose:
       - "5601"
     environment:
-      OPENSEARCH_HOSTS: '["https://opensearch-node1:9200","https://opensearch-node2:9200"]' # must be a string with no spaces when specified as an environment variable
+      OPENSEARCH_HOSTS: '["http://opensearch-node1:9200"]' # must be a string with no spaces when specified as an environment variable
     networks:
       - opensearch-net
 
   pstgres:
-    image: postgres
+    build:
+      context: .
+      dockerfile: Dockerfile.pg
     container_name: postgres
     ports:
       - 5432:5432

@@ -16,3 +16,4 @@ lambda-apigw-lib.iml
 \#*\#
 *~
 .clj-kondo
+.aider*

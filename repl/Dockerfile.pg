@@ -1,0 +1,7 @@
+FROM postgres:17
+
+RUN set -e &&\
+    apt-get update &&\
+    apt-get install postgresql-17-pg-stat-kcache &&\
+    apt-get clean
+

@@ -3,6 +3,7 @@ set -e
 mkdir -p modules
 
 cd repl
+docker compose build
 docker compose down
 docker compose up -d
 cd ..

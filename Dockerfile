@@ -27,6 +27,9 @@ ARG BUILD_ID
 
 COPY --chown=build:build ansible ansible
 
+# We copy from Jenkinsfile repo here (cbd-jenkins-pipeline)
+COPY --chown=build:build scripts/build.clj build.clj
+
 RUN set -e &&\
     echo "Org: ${ARTIFACT_ORG}" &&\
     clj -M:test:unit &&\
@@ -50,6 +53,7 @@ RUN set -e &&\
     export EnvironmentNameUpper=PIPELINE &&\
     export HOST_IP="127.0.0.1" &&\
     export DatabaseEndpoint="$HOST_IP" &&\
+    export IndexDomainScheme="http" &&\
     export IndexDomainEndpoint="$HOST_IP:9200" &&\
     flyway -password="${DatabasePassword}" \
                -schemas=glms,test,prod \
@@ -66,19 +70,20 @@ RUN set -e &&\
     echo "Run ansible stuff" &&\
     ansible-playbook ansible/deploy/deploy.yml &&\
     echo "Building b${BUILD_ID}" &&\
-    clj -M:jar  \
-       --aot "clojure.java.io" \
-       --app-group-id ${ARTIFACT_ORG} \
-       --app-artifact-id ${PROJECT_NAME} \
-       --app-version "1.${BUILD_ID}" &&\
-    cp pom.xml /dist/release-libs/${PROJECT_NAME}-1.${BUILD_ID}.jar.pom.xml &&\
+    clj -T:build jar   \
+             :group-id "\"${ARTIFACT_ORG}\"" \
+             :artifact-id "\"${PROJECT_NAME}\"" \
+             :version "\"1.${BUILD_ID}\"" &&\
+    cp target/classes/META-INF/maven/${ARTIFACT_ORG}/${PROJECT_NAME}/pom.xml \
+             /dist/release-libs/${PROJECT_NAME}-1.${BUILD_ID}.jar.pom.xml &&\
     ls -la target &&\
     cp target/${PROJECT_NAME}-1.${BUILD_ID}.jar /dist/release-libs/${PROJECT_NAME}-1.${BUILD_ID}.jar &&\
+    cat target/classes/META-INF/maven/${ARTIFACT_ORG}/${PROJECT_NAME}/pom.xml &&\
     mvn install:install-file \
          -Dfile=target/${PROJECT_NAME}-1.${BUILD_ID}.jar \
          -DgroupId=${ARTIFACT_ORG} \
          -DartifactId=${PROJECT_NAME} \
-         -DpomFile=pom.xml \
+         -DpomFile=target/classes/META-INF/maven/${ARTIFACT_ORG}/${PROJECT_NAME}/pom.xml \
          -Dversion="1.${BUILD_ID}" \
          -Dpackaging=jar &&\
     echo "Building modules" &&\
@@ -113,16 +118,17 @@ RUN set -e &&\
                 (spit "deps.edn" \
 		      (with-out-str (clojure.pprint/pprint deps))))' &&\
        echo "Generated deps.edn" &&\
+       cp ~/build.clj . &&\
        cat deps.edn &&\
        clj -Stree &&\
        clj -M:test:it &&\
        clj -M:test:unit &&\
-       clj -M:jar  \
-             --aot "clojure.java.io" \
-             --app-group-id ${ARTIFACT_ORG} \
-             --app-artifact-id ${i} \
-             --app-version "1.${BUILD_ID}" &&\
-       cp pom.xml /dist/release-libs/${i}-1.${BUILD_ID}.jar.pom.xml &&\
+       clj -T:build jar   \
+             :group-id "\"${ARTIFACT_ORG}\"" \
+             :artifact-id "\"${i}\"" \
+             :version "\"1.${BUILD_ID}\"" &&\
+       cp target/classes/META-INF/maven/${ARTIFACT_ORG}/${i}/pom.xml \
+             /dist/release-libs/${i}-1.${BUILD_ID}.jar.pom.xml &&\
        cp target/${i}-1.${BUILD_ID}.jar /dist/release-libs/${i}-1.${BUILD_ID}.jar; \
        if [[ $? -gt 0 ]]; then exit 1; fi &&\
        cd ..; \
@@ -137,7 +143,3 @@ RUN set -e &&\
 
 RUN ls -la
 
-
-
-
-RUN cat pom.xml

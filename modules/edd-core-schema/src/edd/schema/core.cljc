@@ -57,9 +57,10 @@
    {:error/message "Non empty string expected."}
    #"\S+"])
 
-(defn schema-keys [schema]
-  (let [props (:children (mu/to-map-syntax schema))]
-    (map (fn [[p]] p) props)))
+(defn schema-keys
+  "Returns the keys defined in a map schema."
+  [schema]
+  (mu/keys schema))
 
 
 (defn replace-merge
