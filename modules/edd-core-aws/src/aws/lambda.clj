@@ -21,20 +21,49 @@
        handler
        :filters filters
        :next-request (fn [_i]
-                       (log/info "Getting next request" @requests)
+                       (log/info "Getting next request")
                        (when @requests
                          (let [request @requests]
                            (reset! requests nil)
                            request)))
        :send-response (fn [_ctx response]
-                        (log/info "Sending response" response)
+                        (log/info "Sending response")
                         (with-open [o (io/writer output)]
                           (.write o (util/to-json response))))))))
 
-(comment
-  (def ctx {})
-  (def handler (fn []))
-  (gen-class
-   :name "lambda.Handler"
-   :implements [com.amazonaws.services.lambda.runtime.RequestStreamHandler])
-  (def -handleRequest (java-request-handler ctx handler :filters [])))
+(defmacro start
+  [ctx handler & other]
+  (let [this-sym# (gensym "this")
+        input-stream-sym# (gensym "input-stream")
+        output-stream-sym# (gensym "output-stream")
+        lambda-context-sym# (gensym "lambda-context")
+        crac-context-sym# (gensym "crac-context")]
+    `(do
+       (gen-class
+        :name "lambda.Handler"
+        :implements [com.amazonaws.services.lambda.runtime.RequestStreamHandler
+                     org.crac.Resource]
+        :prefix "-"
+        :main false)
+
+       (def ~'-handleRequest
+         (fn
+           [~this-sym#
+            ^java.io.InputStream ~input-stream-sym#
+            ^java.io.OutputStream ~output-stream-sym#
+            ^com.amazonaws.services.lambda.runtime.Context ~lambda-context-sym#]
+           (clojure.tools.logging/info "lambda.Handler -handleRequest invoked." {:ctx ~ctx :handler ~handler :other (list ~@other)})
+           (let [actual-handler-fn# (aws.lambda/java-request-handler ~ctx ~handler ~@other)]
+             (actual-handler-fn# ~this-sym# ~input-stream-sym# ~output-stream-sym# ~lambda-context-sym#))))
+
+       (def ~'-beforeCheckpoint
+         (fn
+           [~this-sym# ^org.crac.Context ~crac-context-sym#]
+           (clojure.tools.logging/info "lambda.Handler -beforeCheckpoint invoked.")))
+
+       (def ~'-afterRestore
+         (fn
+           [~this-sym# ^org.crac.Context ~crac-context-sym#]
+           (clojure.tools.logging/info "lambda.Handler -afterRestore invoked."))))))
+
+

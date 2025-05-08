@@ -32,7 +32,7 @@ COPY --chown=build:build scripts/build.clj build.clj
 
 RUN set -e &&\
     echo "Org: ${ARTIFACT_ORG}" &&\
-    clj -M:test:unit &&\
+    clojure -M:test:unit &&\
     SESSION_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600") &&\
     export AWS_DEFAULT_REGION=$(curl -s -H "X-aws-ec2-metadata-token: $SESSION_TOKEN" http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region) &&\
     export AWS_REGION=$AWS_DEFAULT_REGION &&\
@@ -70,7 +70,7 @@ RUN set -e &&\
     echo "Run ansible stuff" &&\
     ansible-playbook ansible/deploy/deploy.yml &&\
     echo "Building b${BUILD_ID}" &&\
-    clj -T:build jar   \
+    clojure -T:build jar   \
              :group-id "\"${ARTIFACT_ORG}\"" \
              :artifact-id "\"${PROJECT_NAME}\"" \
              :version "\"1.${BUILD_ID}\"" &&\
@@ -120,10 +120,10 @@ RUN set -e &&\
        echo "Generated deps.edn" &&\
        cp ~/build.clj . &&\
        cat deps.edn &&\
-       clj -Stree &&\
-       clj -M:test:it &&\
-       clj -M:test:unit &&\
-       clj -T:build jar   \
+       clojure -Stree &&\
+       clojure -M:test:it &&\
+       clojure -M:test:unit &&\
+       clojure -T:build jar   \
              :group-id "\"${ARTIFACT_ORG}\"" \
              :artifact-id "\"${i}\"" \
              :version "\"1.${BUILD_ID}\"" &&\
@@ -136,7 +136,7 @@ RUN set -e &&\
     cd .. &&\
     echo "Running integration tests: $(pwd)" &&\
     env &&\
-    clj -M:test:it &&\
+    clojure -M:test:it &&\
     rm -rf /home/build/.m2/repository &&\
     rm -rf target &&\
     tree /dist
