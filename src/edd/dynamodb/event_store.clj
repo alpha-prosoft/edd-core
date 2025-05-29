@@ -190,6 +190,7 @@
                     #(dynamodb/make-request
                       (assoc ctx :action "Query"
                              :body {:KeyConditionExpression "Id =  :v"
+                                    :ConsistentRead true
                                     :ExpressionAttributeValues
                                     {":v"
                                      {:S (str

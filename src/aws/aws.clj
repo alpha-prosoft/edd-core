@@ -46,18 +46,24 @@
              (throw (ex-info "Distribution failed" error))))
         (flatten resp))))))
 
-(defn send-success
-  [{:keys [invocation-id
-           from-api] :as ctx} body]
-
-  (log/info "Response from-api?" from-api)
-  (util/d-time "Enqueueing success"
-               (enqueue-response ctx body))
+(defn default-success-responder
+  [{:keys [invocation-id]} body]
   (let [runtime-api (util/get-env "AWS_LAMBDA_RUNTIME_API")]
     (util/to-json
      (util/http-post
       (str "http://" runtime-api "/2018-06-01/runtime/invocation/" invocation-id "/response")
       body))))
+
+(defn send-success
+  [{:keys [responder
+           from-api]
+    :or {responder default-success-responder}
+    :as ctx} body]
+
+  (log/info "Response from-api?" from-api)
+  (util/d-time "Enqueueing success"
+               (enqueue-response ctx body))
+  (responder ctx body))
 
 (defn produce-compatible-error-response
   "Because we rely on error on client we will replace :exception to :error"
@@ -68,45 +74,52 @@
      #(clojure-set/rename-keys % {:exception :error})
      resp)))
 
-(defn send-error
+(defn default-error-responder
   [{:keys [invocation-id
-           from-api
-           request] :as ctx} body]
+           from-api]} body]
   (let [runtime-api (util/get-env "AWS_LAMBDA_RUNTIME_API")
         target (if from-api
                  "response"
                  "error")]
-    (print "Sensing error")
-    (when-not from-api
-      (let [items (interleave body
-                              (:Records request))
-            items-to-delete (->> (partition 2 items)
-                                 (filter (fn [[a _]]
-                                           (not (:exception a))))
-                                 (map
-                                  (fn [[_ b]]
-                                    b)))]
-        (when (and (> (count items-to-delete) 0)
-                   (= (count body)
-                      (count (:Records request))))
-          (let [queue (-> items-to-delete
-                          first
-                          :eventSourceARN
-                          (string/split #":")
-                          last)]
-            (sqs/delete-message-batch (assoc ctx
-                                             :queue queue
-                                             :messages items-to-delete))))))
+    (util/to-json
+     (util/http-post
+      (str "http://" runtime-api "/2018-06-01/runtime/invocation/" invocation-id "/" target)
+      body))))
 
-    (util/d-time "Enqueueing error"
-                 (enqueue-response ctx body))
+(defn send-error
+  [{:keys [from-api
+           request
+           responder]
+    :or {responder default-error-responder}
+    :as ctx} body]
+  (log/info "Sending error")
+  (when-not from-api
+    (let [items (interleave body
+                            (:Records request))
+          items-to-delete (->> (partition 2 items)
+                               (filter (fn [[a _]]
+                                         (not (:exception a))))
+                               (map
+                                (fn [[_ b]]
+                                  b)))]
+      (when (and (> (count items-to-delete) 0)
+                 (= (count body)
+                    (count (:Records request))))
+        (let [queue (-> items-to-delete
+                        first
+                        :eventSourceARN
+                        (string/split #":")
+                        last)]
+          (sqs/delete-message-batch (assoc ctx
+                                           :queue queue
+                                           :messages items-to-delete))))))
 
-    (let [body (produce-compatible-error-response body)]
-      (log/error body)
-      (util/to-json
-       (util/http-post
-        (str "http://" runtime-api "/2018-06-01/runtime/invocation/" invocation-id "/" target)
-        body)))))
+  (util/d-time "Enqueueing error"
+               (enqueue-response ctx body))
+
+  (let [body (produce-compatible-error-response body)]
+    (log/error body)
+    (responder ctx body)))
 
 ;; => #'aws.aws/send-error
 (defn get-or-set

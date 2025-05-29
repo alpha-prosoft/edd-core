@@ -8,7 +8,7 @@
 
 (defn aws->send-response
   [ctx response]
-  (log/info "Send response " response)
+  (log/info "Send aws response " response)
   (let [exception (if (vector? response)
                     (-> (filter #(contains? % :exception) response)
                         (first))
