@@ -13,7 +13,9 @@
   [base e & [def]]
   (let [sysenv (System/getenv)
         env (merge
-             {"AWS_LAMBDA_RUNTIME_API" "mock"
+             {"AWS_ACCESS_KEY_ID" ""
+              "AWS_SECRET_ACCESS_KEY" ""
+              "AWS_LAMBDA_RUNTIME_API" "mock"
               "Region"                 region}
              base)]
     (get env e (get sysenv e def))))
@@ -59,6 +61,7 @@
              ctx# (update ctx#
                           :http-mock
                           #(merge {:ignore-missing true} %))]
+
          (with-redefs [lambda.filters/get-realm realm-mock
                        lambda.util/get-env (partial get-env-mock (:env ctx#))
                        lambda.util/get-current-time-ms (fn [] 1587403965)

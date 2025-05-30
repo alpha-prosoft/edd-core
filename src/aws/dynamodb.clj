@@ -15,7 +15,15 @@
 
 (defn make-request
   [{:keys [aws action body]}]
-  (log/info (format "Make request: %s" (:TableName body)))
+  (log/info (format "Make request in region %s: %s" (:region aws)
+                    (or (:TableName body)
+                        (string/join
+                         ", "
+                         (mapv
+                          (fn [req]
+                            (:TableName req))
+                          (:TransactItems body))))))
+
   (let [req {:method     "POST"
              :uri        "/"
              :query      ""
