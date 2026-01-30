@@ -44,7 +44,7 @@
 
   ([db sql-map opt]
    (let [[sql :as sql-vec] (format sql-map (:honey opt))]
-     (util/d-time (cc/format "PG query: %s" sql)
+     (util/d-time (cc/format "PG query:\n%s" (util/format-sql sql))
                   (jdbc/execute! db
                                  sql-vec
                                  (merge jdbc-defaults opt))))))
@@ -74,8 +74,8 @@
 
          message
          (if (seq params)
-           (cc/format "PG query: %s, args: %s" sql (mask-params params))
-           (cc/format "PG query: %s" sql))]
+           (cc/format "PG query:\n%s\n  args: %s" (util/format-sql sql) (mask-params params))
+           (cc/format "PG query:\n%s" (util/format-sql sql)))]
 
      (util/d-time message
                   (jdbc/execute-one! db
