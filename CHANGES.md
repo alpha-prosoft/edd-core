@@ -2,6 +2,9 @@
 
 ## Changes
 
+**[CARS-5710]** Fix schema for uuid extension
+- transfer the uuid extension from test to public
+
 **[CARS-5584]** Add d-metrics macro with invocation timing and EMF submodule
 
 **[CARS-5422]** Improve :keep-meta stripping in test fixture
