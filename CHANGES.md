@@ -2,6 +2,8 @@
 
 ## Changes
 
+**[CARS-5758]** Log command validation failures
+
 **[CARS-5783]** Add missing Snappy reflection-config entry
 - allows the Parquet writer to use :snappy compression in native-image
 

@@ -49,7 +49,38 @@
             (mock/handle-cmd
              (-> ctx
                  (edd/reg-cmd :dummy-cmd dummy-command-handler
-                              :spec [:map
-                                     [:name string?]]))
+                              :consumes [:map
+                                         [:name string?]]))
              {:cmd-id :dummy-cmd
               :id     cmd-id}))))))
+
+(deftest test-missing-failed-custom-validation-command-logs-error
+  (mock/with-mock-dal
+    (let [error-log
+          (atom nil)
+
+          error-count
+          (atom 0)
+
+          result
+          (with-redefs [log/log* (fn [_ level _ message]
+                                   (when (= :error level)
+                                     (swap! error-count inc)
+                                     (reset! error-log message)))]
+            (mock/handle-cmd
+             (-> ctx
+                 (edd/reg-cmd :dummy-cmd dummy-command-handler
+                              :consumes [:map
+                                         [:name string?]]))
+             {:cmd-id :dummy-cmd
+              :id     cmd-id}))]
+      (is
+       (= {:error {:name ["missing required key"]}}
+          (select-keys result [:error])))
+
+      (is
+       (= 1 @error-count))
+
+      (is
+       (re-matches #".*Command validation failed.*:dummy-cmd.*missing required key.*"
+                   @error-log)))))

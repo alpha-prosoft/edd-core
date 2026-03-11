@@ -261,7 +261,12 @@
                        (throw (ex-info "Missing command handler"
                                        {:cmd-id (:cmd-id cmd)})))
                      (if error
-                       validation
+                       (do
+                         (log/errorf "Command validation failed, cmd-id: %s, id: %s, error: %s"
+                                     cmd-id
+                                     id
+                                     (pr-str error))
+                         validation)
                        (let [snapshot
                              (common/get-by-id ctx id)
 
