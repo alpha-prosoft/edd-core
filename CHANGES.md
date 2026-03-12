@@ -2,6 +2,9 @@
 
 ## Changes
 
+**[CARS-5783]** Add missing Snappy reflection-config entry
+- allows the Parquet writer to use :snappy compression in native-image
+
 **[CARS-5710]** Fix schema for uuid extension
 - transfer the uuid extension from test to public
 
