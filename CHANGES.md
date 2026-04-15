@@ -2,6 +2,8 @@
 
 ## Changes
 
+**[AP-860]** Cache context on startup
+
 **[AP-856]** Improve starup performance
 
 **[AP-826]** Fix order of names (typo)
