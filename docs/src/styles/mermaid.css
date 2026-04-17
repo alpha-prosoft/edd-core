@@ -1,0 +1,25 @@
+/* Mermaid diagram styling.
+   Mermaid injects SVG into <pre class="mermaid">, override the code-block
+   look so it reads as a diagram, not a code listing. */
+pre.mermaid {
+  background: transparent !important;
+  border: none !important;
+  padding: 1rem 0 !important;
+  margin: 1.5rem auto !important;
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+  font-family: inherit;
+  white-space: normal;
+}
+
+pre.mermaid > svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* While mermaid hasn't rendered yet, hide the raw DSL text to avoid a flash
+   of source code. */
+pre.mermaid:not([data-processed="true"]) {
+  visibility: hidden;
+}
