@@ -2,6 +2,8 @@
 
 ## Changes
 
+**[AP-982]** Add e2e tests for edd features
+
 **[AP-976]** Add features extension point
 We can use it to implement general extensions
 for edd-core application. We use security as
