@@ -61,6 +61,68 @@
   [ctx]
   (get-in ctx [:edd-core :features] []))
 
+(defn feature-fn
+  "fn-key of the last registered feature providing it."
+  [ctx fn-key]
+  (last (keep fn-key (get-features ctx))))
+
+(defn invocation-ctx
+  "ctx of one invocation on a long-running runtime: every feature providing
+   :invocation-ctx (fn [ctx] ctx') gets to renew what it keeps in ctx."
+  [ctx]
+  (reduce (fn [current renew]
+            (renew current))
+          ctx
+          (keep :invocation-ctx (get-features ctx))))
+
+(defn put-deps-resolver
+  [ctx config]
+  (assoc-in ctx [:edd-core :deps-resolver] config))
+
+(defn deps-resolver
+  [ctx]
+  (get-in ctx [:edd-core :deps-resolver]))
+
+(defn- remote-dep?
+  [[_key dep]]
+  (and (map? dep)
+       (contains? dep :service)))
+
+(defn- registrations-with-remote-deps
+  [ctx]
+  (let [registrations
+        (concat (get-in ctx [:edd-core :commands])
+                (get-in ctx [:edd-core :queries])
+                (map (juxt :feature-id identity) (get-features ctx)))
+
+        dep-pairs
+        (fn [deps]
+          (if (vector? deps)
+            (partition 2 deps)
+            (seq deps)))]
+    (keep
+     (fn [[id {:keys [deps]}]]
+       (when (some remote-dep? (dep-pairs deps))
+         id))
+     registrations)))
+
+(defn- init-deps-resolver
+  "Initializes the registered deps resolver. Remote deps (with :service)
+   need one, so their registrations fail init without it."
+  [ctx]
+  (if-let [{:keys [resolver] :as config} (deps-resolver ctx)]
+    (let [init
+          (get resolver :init (fn [_ctx config] config))]
+      (put-deps-resolver ctx (init ctx config)))
+    (let [remote
+          (registrations-with-remote-deps ctx)]
+      (when (seq remote)
+        (throw (ex-info (str "Remote deps need a deps resolver, register one with "
+                             "edd.core/reg-deps-resolver (e.g. edd.client.deps/register): "
+                             (vec remote))
+                        {:registrations (vec remote)})))
+      ctx)))
+
 (defn put-feature
   [ctx feature]
   (let [feature-id
@@ -231,5 +293,8 @@
                (init ctx)
                ctx))
            ctx
-           (get-features ctx))]
+           (get-features ctx))
+
+          ctx
+          (init-deps-resolver ctx)]
       (assoc-in ctx [:edd-core :features-initialized] true))))

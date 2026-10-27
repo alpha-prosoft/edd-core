@@ -29,6 +29,7 @@
                     log-request-error
                     log-response
                     get-records
+                    get-response-effects
                     store-results]]
    [lambda.util :as util]
    [malli.core :as m]
@@ -251,6 +252,13 @@
           (into [])
           (sort-by #(:event-seq %))))))
 
+(defmethod get-response-effects
+  :memory
+  [{:keys [request-id breadcrumbs] :as ctx}]
+  (filterv #(and (= request-id (:request-id %))
+                 (= breadcrumbs (vec (butlast (:breadcrumbs %)))))
+           (get-realm-store ctx :command-store)))
+
 (defmethod get-command-response
   :memory
   [{:keys [request-id breadcrumbs] :as ctx}]
@@ -313,8 +321,17 @@
   [ctx body]
   (util/d-time
    (format "MemoryEventStore log-request, request-id: %s" (:request-id body))
-   (update-realm-store! ctx :command-log
-                        (fn [v] (conj (or v []) body)))))
+   (let [same-request?
+         (fn [logged]
+           (= [(:request-id logged) (:breadcrumbs logged)]
+              [(:request-id body) (:breadcrumbs body)]))
+
+         attempt
+         (when (:request-id body)
+           (count (filter same-request? (get-realm-store ctx :command-log))))]
+     (update-realm-store! ctx :command-log
+                          (fn [v] (conj (or v []) body)))
+     attempt)))
 
 (defmethod log-request
   :memory

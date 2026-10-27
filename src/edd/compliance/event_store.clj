@@ -2,7 +2,8 @@
   "Compliance test suite for event store (DAL) implementations.
    Asserts that all implementations (Memory, Postgres, DynamoDB) honor the
    same contract for store-results, get-events, get-max-event-seq,
-   get-aggregate-id-by-identity, get-command-response and get-records.
+   get-aggregate-id-by-identity, get-command-response, get-records and
+   get-response-effects.
 
    This namespace is NOT run directly. Implementation namespaces bind the
    dynamic vars below and re-export each deftest:
@@ -24,7 +25,13 @@
      (consumed by edd.el.cmd/retry)
    - store-results is atomic: a conflict persists nothing"
   (:require [clojure.test :refer [deftest is testing]]
+            [edd.core :as edd]
             [edd.dal :as dal]
+            [edd.distribution :as distribution]
+            [edd.distribution.memory :as memory-distribution]
+            [edd.memory.view-store :as view-store]
+            [lambda.request :as request]
+            [lambda.runtime :as runtime]
             [lambda.uuid :as uuid]))
 
 ;;; ============================================================================
@@ -665,6 +672,22 @@
          (is
           (nil? outcome)))))))
 
+(deftest e3-log-request-counts-attempts
+  (testing "E3: log-request tells how many times the request was logged before"
+    (*dal-wrapper*
+     (fn []
+       (let [ctx
+             (make-ctx)
+
+             log!
+             #(dal/log-request ctx {:commands    [{:cmd-id :test-cmd
+                                                   :id     (uuid/gen)}]
+                                    :request-id  (:request-id ctx)
+                                    :breadcrumbs [0]})]
+         (is
+          (= [0 1 2]
+             [(log!) (log!) (log!)])))))))
+
 (deftest e2-log-request-error
   (testing "E2: log-request-error records an error for a logged request"
     (*dal-wrapper*
@@ -1187,3 +1210,129 @@
          (is
           (= 0
              (dal/get-max-event-seq (assoc ctx-prod :id agg-id)))))))))
+
+;;; ============================================================================
+;;; Category J: Retried Requests
+;;; ============================================================================
+
+(defn- retry-service-ctx
+  "A service on the store under test whose router is down while
+   router-down? holds true."
+  [router-down?]
+  (let [with-transport
+        (memory-distribution/register (make-ctx) (atom {}))
+
+        with-outage
+        (edd/reg-feature with-transport :compliance/router-outage
+                         :publish-filter (fn [ctx request chain]
+                                           (when @router-down?
+                                             (throw (ex-info "Router down" {})))
+                                           (chain ctx request)))
+
+        with-view-store
+        (view-store/register with-outage)
+
+        with-cmd
+        (edd/reg-cmd with-view-store :retry-cmd
+                     (fn [_ctx cmd]
+                       {:event-id :retry-event
+                        :id       (:id cmd)}))
+
+        with-fx
+        (edd/reg-event-fx with-cmd :retry-event
+                          (fn [_ctx event]
+                            {:service  :retry-target-svc
+                             :commands [{:cmd-id :retry-fx-cmd
+                                         :id     (:id event)}]}))]
+    (runtime/init with-fx edd/handler {})))
+
+(defn- attempt!
+  "Handles request like a runtime does: answers it, then distributes."
+  [ctx request]
+  (binding [request/*request* (atom {})]
+    (let [response
+          (runtime/handle ctx request)]
+      {:response    response
+       :distributed (runtime/distribute! ctx response)})))
+
+(deftest j1-retried-request-redistributes-effects
+  (testing "J1: When distribution fails after a command was stored, the
+            retried request does not run the command again and distributes
+            the stored events and effects"
+    (*dal-wrapper*
+     (fn []
+       (let [router-down?
+             (atom true)
+
+             ctx
+             (retry-service-ctx router-down?)
+
+             agg-id
+             (uuid/gen)
+
+             request
+             {:request-id     (:request-id ctx)
+              :interaction-id (:interaction-id ctx)
+              :meta           {:realm test-realm}
+              :commands       [{:cmd-id :retry-cmd
+                                :id     agg-id}]}
+
+             failed-attempt
+             (attempt! ctx request)
+
+             stored-effects
+             (eventually
+              #(= 1 (count %))
+              #(dal/get-response-effects ctx))
+
+             _
+             (fetch-command-response ctx)
+
+             _
+             (reset! router-down? false)
+
+             retried-attempt
+             (attempt! ctx request)
+
+             published
+             (map #(get-in % [:Records 0])
+                  (memory-distribution/bodies ctx (distribution/response-destination ctx)))]
+         (is
+          (true?
+           (get-in failed-attempt [:response :result :success])))
+
+         (is
+          (runtime/failed? (:distributed failed-attempt)))
+
+         (is
+          (= [:retry-target-svc]
+             (map :service stored-effects)))
+
+         (is
+          (true?
+           (get-in retried-attempt [:response :result :success])))
+
+         (is
+          (not (runtime/failed? (:distributed retried-attempt))))
+
+         (is
+          (= 1
+             (count (fetch-events ctx agg-id 1))))
+
+         (is
+          (= [(:service-name ctx)]
+             (map :service published)))
+
+         (is
+          (= [agg-id]
+             (map :id (mapcat #(get-in % [:resp :events]) published))))
+
+         (is
+          (= [{:service :retry-target-svc
+               :cmd-id  :retry-fx-cmd
+               :id      agg-id}]
+             (map (fn [effect]
+                    {:service (:service effect)
+                     :cmd-id  (get-in effect [:commands 0 :cmd-id])
+                     :id      (get-in effect [:commands 0 :id])})
+                  (mapcat #(get-in % [:resp :effects]) published)))))))))

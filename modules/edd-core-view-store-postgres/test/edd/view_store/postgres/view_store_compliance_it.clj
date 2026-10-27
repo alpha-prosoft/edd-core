@@ -15,21 +15,20 @@
             [edd.view-store.postgres.view-store :as view-store]
             [edd.view-store.postgres.fixtures :as fix]
             [edd.postgres.event-store :as event-store]
-            [aws.ctx :as aws-ctx]
             [lambda.ctx :as lambda-ctx]))
 
 ;;; ============================================================================
 ;;; Test Setup
 ;;; ============================================================================
 
-(def ^:dynamic *aws-ctx* nil)
+(def ^:dynamic *base-ctx* nil)
 
 (defn make-postgres-ctx
-  "Creates a Postgres-based context for testing with AWS support for S3 backup."
+  "Creates a Postgres-based context for testing."
   [& {:keys [realm service-name]
       :or {realm compliance/test-realm
            service-name :test-service}}]
-  (-> *aws-ctx*
+  (-> *base-ctx*
       (assoc :service-name service-name
              :meta {:realm realm})
       (view-store/register)
@@ -42,26 +41,11 @@
   ;; Tests run within the *DB* binding established by fixtures
   (test-fn))
 
-(defn setup-aws-ctx
-  "Initialize AWS context for S3 operations (used by Postgres view store for backup).
-   Uses lambda.ctx/init and aws.ctx/init to set up configuration from environment variables."
+(defn setup-base-ctx
+  "Service configuration from the environment (lambda.ctx/init)."
   [test-fn]
-  (let [ctx (-> {}
-                (lambda-ctx/init)
-                (aws-ctx/init))
-
-        ;; Validate that AWS context was initialized correctly
-        _ (when-not (get-in ctx [:aws :region])
-            (throw (ex-info "AWS context initialization failed - missing region"
-                            {:aws-config (:aws ctx)
-                             :hint "Ensure Region, AWS_DEFAULT_REGION, or AWS_REGION environment variable is set. Run 'source ./pre-build.sh' before running integration tests"})))
-
-        _ (when-not (get-in ctx [:aws :account-id])
-            (throw (ex-info "AWS context initialization failed - missing account-id"
-                            {:aws-config (:aws ctx)
-                             :hint "Ensure AccountId environment variable is set. Run 'source ./pre-build.sh' before running integration tests"})))]
-    (binding [*aws-ctx* ctx]
-      (test-fn))))
+  (binding [*base-ctx* (lambda-ctx/init {})]
+    (test-fn)))
 
 ;;; ============================================================================
 ;;; Fixtures
@@ -69,7 +53,7 @@
 
 ;; Setup AWS context and database (runs once for all tests)
 (use-fixtures :once
-  setup-aws-ctx        ;; Initialize AWS for S3 backup
+  setup-base-ctx       ;; Service configuration from the environment
   fix/fix-with-db      ;; Create connection pool to Postgres
   fix/fix-with-db-init) ;; Initialize DB config
 

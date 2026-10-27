@@ -1,6 +1,10 @@
 {:deps {app-group-id/edd-core {:local/root "../../"}
         app-group-id/edd-router {:local/root "../../modules/edd-router"}
-        app-group-id/edd-java-lambda-runtime {:local/root "../../modules/edd-java-lambda-runtime"}}
+        app-group-id/edd-java-lambda-runtime {:local/root "../../modules/edd-java-lambda-runtime"}
+        app-group-id/edd-core-sqs {:local/root "../../modules/edd-core-sqs"}
+        app-group-id/edd-core-aws {:local/root "../../modules/edd-core-aws"}
+        app-group-id/edd-core-undertow {:local/root "../../modules/edd-core-undertow"}
+        app-group-id/edd-core-kafka {:local/root "../../modules/edd-core-kafka"}}
  :paths ["src" "resources"]
- :aliases {:build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.13"}}
+ :aliases {:build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
                    :ns-default build}}}

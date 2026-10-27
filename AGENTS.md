@@ -7,6 +7,17 @@
 - Do not event do migrations in docker-compose.ymal. We do them in pre-build.sh 
 - If there is any change in test/doc you have to ask me to confirm. This is our external API
 
+## Commit checklist
+
+After every commit (including a new change or amend), and again after a rebase:
+
+1. Run `./changes.py`; the first entry of `CHANGES.md` must match the commit
+   message.
+2. Set the scaffold version in `README.md`, `modules/edd-core-scaffold/README.md`
+   and this file to `./version.sh`; every commit changes it.
+3. Amend the commit with those files.
+4. Run `./checks.sh`; it must pass before pushing, `pre-build.sh` runs it in CI.
+
 EDD-Core is a Clojure library for building event-sourced CQRS APIs. This guide provides everything needed to implement services using this architecture.
 
 ## Core Architecture
@@ -180,6 +191,15 @@ The context map flows through all handlers containing:
   :deps [:inventory get-inventory-dep])
 ```
 
+Remote deps go through the registered deps resolver; startup fails without one.
+`edd-core-client` provides the HTTP resolver (POST to the target service's
+`/query`), with credentials from `aws.cognito/credentials` or the `ServiceToken`
+env var (default). `mock/ctx` resolves them from the `:deps` mocks.
+
+```clojure
+(edd.client.deps/register ctx {:credentials (aws.cognito/credentials)})
+```
+
 **Parameterized Dependencies** (factories):
 ```clojure
 (defn load-table [date-key]
@@ -210,6 +230,8 @@ touching individual registrations.
                    (chain ctx events))
   :apply-filter (fn [ctx apply chain]     ;; wraps aggregate materialization
                   (chain ctx apply))
+  :invocation-ctx (fn [ctx] ctx')         ;; long-running runtimes: renew what
+                                          ;; expires, for every invocation
   :schema [:map [:auth AuthSchema]])      ;; reg-cmd/reg-query options this
                                           ;; feature consumes, validated at init
 ```
@@ -282,6 +304,66 @@ Or inline per registration (compiled into allow policies at init):
 - Wildcards and conditions compile once at startup; malformed policies fail
   registration, malformed conditions fail init.
 - Denial: `{:error {:message "Forbidden" :cmd-id ... :role ... :policy ...}}`.
+
+### 9. Runtimes and Filters
+
+`lambda.core/start` runs a handler on the runtime named by `:edd/runtime` or
+`-Dedd.runtime` (no default), e.g. `aws.lambda/lambda-custom-runtime` or
+`edd.undertow.core/start`; the handler is `edd.core/handler` or your own
+`(fn [ctx request] response)`.
+`edd.java-lambda-runtime.core/start` is the Lambda Java runtime with SnapStart.
+The runtime decodes its input: HTTP requests (API Gateway, Undertow) go through
+`lambda.http` (authentication, `/health`, JSON response, 500 on errors), queue
+records (SQS, Kafka) are one request each.
+
+`:filters` are servlet-style wrappers around the handler, first one outermost:
+
+```clojure
+(defn audit-filter [ctx request chain]
+  (let [response (chain ctx request)]   ;; don't call chain to short-circuit
+    (log/info "handled" (:request-id request))
+    response))
+
+(lambda/start ctx edd/handler :filters [aws.filters/from-bucket audit-filter])
+```
+
+`:post-filter` and `{:cond :fn}` filters were removed and fail at startup.
+
+### 10. Distribution
+
+Effects and events travel through the router. A service running
+`edd.core/handler`, and the router, register one transport; without it every
+request fails with `No distributor registered` (your own handler needs none):
+
+- `edd.sqs.distributor/register` (edd-core-sqs), `edd.kafka.distributor/register`
+  (edd-core-kafka, Undertow only);
+- `edd.distribution.memory/register` in tests; `mock/ctx` has it, read router
+  messages with `(edd.distribution.memory/published ctx)`.
+
+The router service runs `edd.router.core/handler`; on Undertow it also calls
+`(edd.router.core/register ctx)` to consume the router destination.
+
+Responses travel to the router inline. Services with big responses register a
+response cache, `(edd.response.s3/register ctx)` (edd-core-aws): parts go to
+S3, router messages carry references. `(edd.s3.view-store/register-snapshot-cache ctx)`
+keeps aggregate snapshots in S3 in front of the OpenSearch/Postgres view store.
+
+### 11. Authentication
+
+HTTP requests run as the user from the feature providing `:resolve-user`
+(fn [ctx] user). `(aws.cognito/register ctx)` reads it from the Cognito JWT
+(`X-Authorization` header) or the API Gateway authorizer; without such a
+feature HTTP requests are rejected.
+
+## Generating a Service
+
+`modules/edd-core-scaffold` generates a working project (runtime, distributor,
+stores, deployment), see its README:
+
+```bash
+clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.340.0"}}}' \
+  -M -m edd.scaffold my-svc
+```
 
 ## Module Pattern (Recommended Structure)
 
@@ -368,7 +450,12 @@ Or inline per registration (compiled into allow policies at init):
 **Lambda Handler** (`src/myapp/core.clj`):
 ```clojure
 (ns myapp.core
-  (:require [edd.core :as edd]
+  (:require [aws.cognito :as cognito]
+            [edd.client.deps :as deps]
+            [edd.core :as edd]
+            [edd.dynamodb.event-store :as event-store]
+            [edd.s3.view-store :as view-store]
+            [edd.sqs.distributor :as distributor]
             [lambda.core :as lambda]
             [myapp.module :as module]))
 
@@ -376,7 +463,13 @@ Or inline per registration (compiled into allow policies at init):
   (lambda/start
     (-> {}
         (assoc :service-name :myapp-svc)
-        (module/register))))
+        (distributor/register)
+        (event-store/register)
+        (view-store/register)
+        (cognito/register)
+        (deps/register {:credentials (cognito/credentials)})
+        (module/register))
+    edd/handler))
 ```
 
 ## Schema Definition (Malli)
@@ -499,6 +592,24 @@ Or inline per registration (compiled into allow policies at init):
   ...)
 ```
 
+**Whole request path** (authentication, filters, `edd.core/handler`,
+distribution) on the in-memory runtime `lambda.runtime.memory`:
+
+```clojure
+(require '[edd.test.fixture.runtime :as runtime])
+
+(mock/with-mock-dal
+  (let [svc (runtime/start (my/register mock/ctx)
+                           :user {:id "am@example.com" :role :account-manager
+                                  :roles [:account-manager] :realm :test})]
+    (runtime/post svc {:request-id (uuid/gen) :interaction-id (uuid/gen)
+                       :commands [{:cmd-id :update-user :id user-id}]})
+    ;; => {:status 200 :body {:result {...}}}
+    (runtime/handle-records svc [{:apply {:aggregate-id user-id} ...}])
+    ;; => {:responses [...] :redeliver? false}
+    (runtime/routed)))                       ;; records sent to the router
+```
+
 ## Request/Response Format
 
 **Command Request**:
@@ -528,6 +639,11 @@ Or inline per registration (compiled into allow policies at init):
  :request-id #uuid "..."
  :interaction-id #uuid "..."}
 ```
+
+A request-id seen before adds `:meta {:handler {:attempt 1 :cached true}}`:
+`:attempt` counts the earlier tries (not on DynamoDB), `:cached` means the
+stored response was returned and the command did not run again. A first
+execution has no `:meta`.
 
 **Error Response**:
 ```clojure
@@ -616,7 +732,7 @@ Or inline per registration (compiled into allow policies at init):
 - **command_request_log**: All incoming commands
 - **command_response_log**: Responses (for deduplication)
 - **command_store**: Effect commands (for tracing)
-- **aggregate_store**: Materialized views (ElasticSearch/Postgres)
+- **aggregate_store**: Materialized views (Postgres, OpenSearch, S3)
 
 **Optimistic Locking**: `event_seq` prevents concurrent updates to same aggregate
 
@@ -627,6 +743,9 @@ Or inline per registration (compiled into allow policies at init):
 3. **"oldString not found"**: Schema validation failed
 4. **Infinite loops**: Check breadcrumbs depth (max 20)
 5. **UUID conflicts**: Use `(uuid/gen)` for new IDs, not hardcoded values
+6. **"No distributor registered"**: Register a transport (see Distribution)
+7. **"Remote deps need a deps resolver"**: Register `edd.client.deps/register`
+8. **"No authentication registered"**: Register `aws.cognito/register` (or another `:resolve-user` feature)
 
 ## Quick Reference
 
@@ -663,7 +782,7 @@ This guide provides everything needed to build production-grade event-sourced se
 
 ### Prerequisites
 
-- **Docker** - For integration tests (PostgreSQL + OpenSearch)
+- **Docker** - For integration tests (PostgreSQL, OpenSearch, Kafka)
 - **AWS CLI** - For authentication (configured with valid credentials)
 - **Clojure CLI** - For running tests
 - **Make** - For running test commands
@@ -690,6 +809,12 @@ This command automatically:
 - Runs database migrations
 - Sets up environment variables
 - Runs integration tests
+
+**Local E2E** (ping/pong/router on Undertow + Kafka + Postgres in docker compose,
+the same `e2e/it` suite CI also runs against Lambda + SQS):
+```bash
+make e2e-local
+```
 
 **Cleanup** (after integration tests):
 ```bash

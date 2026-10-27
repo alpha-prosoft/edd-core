@@ -8,7 +8,9 @@
             [edd.test.fixture.dal :as mock]
             [edd.memory.event-store :as event-store]
             [edd.memory.view-store :as view-store]
-            [edd.dal :as dal]))
+            [edd.dal :as dal]
+            [edd.distribution.memory :as memory]
+            [lambda.runtime :as runtime]))
 
 (def agg-id (uuid/parse "0000bf24-c357-4ee2-ae1e-6ce22c90c183"))
 
@@ -41,12 +43,17 @@
       :ApproximateFirstReceiveTimestamp
       "1580103331242"}}]})
 
+(defn- handle-sqs-event
+  [ctx event]
+  (runtime/handle-records (runtime/init ctx edd/handler {}) (:Records event)))
+
 (def ctx
   (-> {}
       (assoc :service-name :local-test
              :hosted-zone-name "example.com"
              :environment-name-lower "local"
              :meta {:realm :test})
+      (memory/register)
       (event-store/register)
       (view-store/register)
       (edd/reg-cmd :cmd-1 (fn [ctx cmd]
@@ -70,7 +77,7 @@
                    {:event-id :event-1
                     :event-seq 2
                     :id agg-id}]}
-    (let [resp (edd/handler ctx req)]
+    (let [resp (handle-sqs-event ctx req)]
       (mock/verify-state :aggregate-store
                          [{:id agg-id
                            :version 2
@@ -119,7 +126,7 @@
                      {:event-id :event-1
                       :event-seq 3
                       :id agg-id}]}
-      (let [resp (edd/handler ctx req)]
+      (let [resp (handle-sqs-event ctx req)]
         (mock/verify-state :aggregate-store
                            [{:id agg-id
                              :name nil
@@ -139,7 +146,7 @@
       {:event-store [{:event-id :event-1
                       :event-seq 1
                       :id agg-id}]}
-      (let [resp (edd/handler ctx req)]
+      (let [resp (handle-sqs-event ctx req)]
         (mock/verify-state :aggregate-store
                            [{:id agg-id
                              :version 1}])

@@ -18,9 +18,8 @@ _prebuild_main() {
 
   ### Let's deal with the changes before stepping further.
 
-  # Run changes.py with --shallow and --check flags
-  echo "Checking for uncommitted changes..."
-  ./changes.py --shallow --check
+  # CHANGES.md and the scaffold version in the docs
+  ./checks.sh
 
   ### end changes
 
@@ -124,6 +123,7 @@ _prebuild_main() {
   export DatabasePort="${DatabasePort:-5433}"
   export IndexDomainScheme="${IndexDomainScheme:-http}"
   export IndexDomainEndpoint="${IndexDomainEndpoint:-127.0.0.1:9200}"
+  export KafkaBootstrapServers="${KafkaBootstrapServers:-127.0.0.1:9092}"
 
   ### Deploy CloudFormation stack for S3 bucket
 
@@ -344,7 +344,7 @@ EOF
 
   echo "Cleaning up old Docker resources..."
   # Stop and remove all existing compose services and volumes
-  docker compose down --volumes --remove-orphans
+  docker compose --profile e2e down --volumes --remove-orphans
 
   # Also clean up any anonymous volumes that might be left behind
   echo "Removing any orphaned anonymous volumes..."
@@ -405,6 +405,21 @@ EOF
 
     return 1
   fi
+
+  echo -e "${GREEN}Waiting for Kafka to be ready...${NC}"
+  count=1
+  until docker compose exec -T kafka /opt/kafka/bin/kafka-broker-api-versions.sh \
+          --bootstrap-server kafka:29092 >/dev/null 2>&1 || [[ $count -gt 15 ]]; do
+    echo -e "${YELLOW}Waiting for Kafka ($count/15)${NC}"
+    sleep 5
+    ((count++))
+  done
+  if [[ $count -gt 15 ]]; then
+    echo -e "${RED}ERROR: Kafka failed to start within timeout${NC}"
+    docker compose logs --tail 50 kafka
+    return 1
+  fi
+  echo -e "${GREEN}Kafka is ready at ${KafkaBootstrapServers}${NC}"
 
   echo ""
   echo -e "${GREEN}======================================================${NC}"
@@ -469,6 +484,8 @@ EOF
     "test_edd_core"
     "test_glms_dimension_svc"
     "test_glms_application_svc"
+    "test_ping_svc"
+    "test_pong_svc"
     "prod_test_service"
     "realm_a_test_service"
     "realm_b_test_service"
@@ -487,6 +504,14 @@ EOF
     run_flyway_migration "$schema" "$SVC_LOCATIONS" "$SVC_VOLUMES"
     echo -e "${GREEN}  ${schema} schema complete${NC}"
   done
+
+  # The local E2E services (Undertow + Kafka + Postgres) run from jars built
+  # against this checkout; build.sh runs e2e/it against them (Step 8c).
+  if [ "${E2E_LOCAL:-true}" = "true" ]; then
+    echo -e "${GREEN}Starting local E2E services...${NC}"
+    ./e2e/run-e2e-local.sh build
+    ./e2e/run-e2e-local.sh up
+  fi
 
   echo ""
   echo -e "${GREEN}======================================================${NC}"

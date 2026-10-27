@@ -17,11 +17,12 @@
 
 (ns edd.test.fixture.dal
   (:require [clojure.pprint :as pprint]
+            [clojure.data :refer [diff]]
+            [edd.distribution.memory :as memory-distribution]
             [clojure.tools.logging :as log]
             [edd.el.event :as event]
             [clojure.test :refer [is]]
             [edd.el.cmd :as cmd]
-            [edd.response.cache :as response-cache]
             [edd.core :as edd]
             [lambda.util :as util]
             [edd.common :as common]
@@ -33,7 +34,6 @@
             [lambda.request :as request]
             [edd.el.query :as query]
             [edd.ctx :as edd-ctx]
-            [aws.aws :as aws]
             [lambda.ctx :as lambda-ctx]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Data Access Layer ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -216,31 +216,43 @@
   [& [id]]
   (get-in @*dal-state* [:identities (keyword id)] (uuid/gen)))
 
-(defn prepare-dps-calls
-  [ctx]
-  (mapv
-   (fn [%]
-     (let [req {:query
-                (:query %)}
-           req-1 (if (:request-id %)
-                   (assoc req :request-id (:request-id %))
-                   req)
-           req-2 (if (:interaction-id %)
-                   (assoc req-1 :interaction-id (:interaction-id %))
-                   req-1)]
-       (-> {:post (query/calc-service-query-url
-                   (:service %)
-                   ;; Use meta from dep config, or fall back to ctx meta
-                   (or (:meta %) (:meta ctx)))
-            :body (util/to-json {:result (:resp %)})
-            :req  req-2})))
+(defn- realm-matches?
+  "Remote endpoints only tell the test realm from all others."
+  [mock-meta {:keys [realm]}]
+  (= (= :test (:realm mock-meta))
+     (= :test realm)))
 
-   (get @*dal-state* :dps
-        (get @*dal-state* :deps []))))
+(defn- dep-mock-matches?
+  "A :deps mock answers a request for its :service and realm whose query
+   contains the mock :query, and the mock :request-id / :interaction-id when
+   given. Requests are compared as JSON round trips, like the HTTP calls
+   they stand for."
+  [{:keys [service meta] :as request} mock]
+  (let [mock-req
+        (cond-> {:query (:query mock)}
+          (:request-id mock) (assoc :request-id (:request-id mock))
+          (:interaction-id mock) (assoc :interaction-id (:interaction-id mock)))
 
-(defn aws-get-token
-  [_ctx]
-  "#mock-id-token")
+        actual
+        (util/to-edn (util/to-json (select-keys request [:query :meta :request-id :interaction-id])))]
+    (and (= (keyword service) (keyword (:service mock)))
+         (realm-matches? (get mock :meta {:realm :test}) meta)
+         (nil? (first (diff mock-req actual))))))
+
+(defn- resolve-mock-dep
+  [_ctx _config {:keys [service query] :as request}]
+  (let [mocks
+        (get @*dal-state* :dps (get @*dal-state* :deps []))]
+    (if-let [mock (first (filter #(dep-mock-matches? request %) mocks))]
+      {:result (:resp mock)}
+      (do
+        (log/errorf "Dependency mock not found, service: %s, query: %s, available mocks: %s"
+                    service (pr-str query) (count mocks))
+        {:result nil}))))
+
+(def deps-resolver
+  "Resolves remote deps from the :deps mocks of with-mock-dal."
+  {:resolve resolve-mock-dep})
 
 (def ctx
   (-> {:response-schema-validation :throw-on-error
@@ -248,7 +260,8 @@
        :hosted-zone-name "example.com"
        :environment-name-lower "local"
        :meta {:realm :test}}
-      (response-cache/register-default)
+      (memory-distribution/register)
+      (edd/reg-deps-resolver {:resolver deps-resolver})
       (view-store/register)
       (event-store/register)))
 
@@ -295,12 +308,10 @@
                   request/*request* (atom {})]
           %
           (client/mock-http
-           {:responses (vec (concat (prepare-dps-calls ctx)
-                                    (get @*dal-state* :responses [])))
+           {:responses (get @*dal-state* :responses [])
             :config {:reuse-responses true}}
            (with-redefs
-            [aws/get-token aws-get-token
-             common/create-identity create-identity
+            [common/create-identity create-identity
              query/handle-query handle-query-stripped]
              (do (log/info "with-mock-dal using seed" (:seed *queues*))
                  ~@body)))))))
@@ -471,7 +482,7 @@
     (when (seq remote)
       (put-back-commands! remote))
     (doall
-     (for [{:keys [commands] :as cmd} local]
+     (for [{:keys [commands]} local]
        (doall
         (for [cmd commands]
           (apply-cmd ctx cmd)))))))

@@ -1,0 +1,9 @@
+{:deps {org.clojure/clojure {:mvn/version "1.12.6"}}
+ :paths ["src" "resources"]
+ :aliases {:build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
+                   :ns-default build}
+           :test {:extra-paths ["test"]}
+           :unit {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+                  :main-opts ["-m" "kaocha.runner" "unit"]}
+           :it {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+                :main-opts ["-m" "kaocha.runner" "it"]}}}

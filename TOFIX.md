@@ -5,7 +5,7 @@
 **Symptom**: Command producing many events (e.g. 114x `:tournament->category-added`) fails with
 `java.util.zip.ZipException: Not in GZIP format` in `lambda.gzip/ungzip-response`.
 
-**Root cause**: `store-results :dynamodb` (`src/edd/dynamodb/event_store.clj`) writes all
+**Root cause**: `store-results :dynamodb` (`modules/edd-core-aws/src/edd/dynamodb/event_store.clj`) writes all
 events + effects + identities + response-log as a single `TransactWriteItems` call.
 DynamoDB limits `TransactItems` to 100 items (and 4 MB total). 114 events + 1 response-log
 = 115 Puts -> HTTP 400 `ValidationException`.

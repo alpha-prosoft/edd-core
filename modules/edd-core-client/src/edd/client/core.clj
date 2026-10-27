@@ -5,8 +5,8 @@
   (:import
    java.net.URL)
   (:require
-   [aws.aws :as aws]
    [clojure.tools.logging :as log]
+   [edd.client.deps :as deps]
    [lambda.util :as util]))
 
 (set! *warn-on-reflection* true)
@@ -81,10 +81,6 @@
                  interaction-id]}
          ctx
 
-         token
-         (or (get ctx :dev/token)
-             (aws/get-token ctx))
-
          payload-full
          (assoc payload
                 :meta ctx-meta
@@ -94,13 +90,16 @@
          headers-full
          (assoc headers
                 "Content-Type" "application/json"
-                "X-Authorization" token
                 "Accept-Encoding" "gzip")
 
          request
-         {:body (util/to-json payload-full)
-          :headers headers-full
-          :timeout timeout}
+         (if-let [token (get ctx :dev/token)]
+           {:body (util/to-json payload-full)
+            :headers (assoc headers-full "X-Authorization" token)
+            :timeout timeout}
+           (deps/authorize ctx {:body (util/to-json payload-full)
+                                :headers headers-full
+                                :timeout timeout}))
 
          _
          (log/infof "Remote service call, service: %s, method: %s, url: %s"

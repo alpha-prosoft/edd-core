@@ -11,7 +11,7 @@
   [{:keys [main artifact]}]
   (let [basis (b/create-basis {:project "deps.edn"})
         uber-file (format "target/%s.jar" artifact)]
-    (b/delete {:path "target"})
+    (b/delete {:path class-dir})
     (b/copy-dir {:src-dirs ["src" "resources"]
                  :target-dir class-dir})
     (b/compile-clj {:basis basis

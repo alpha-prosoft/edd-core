@@ -1,6 +1,7 @@
 {:deps
  {app-group-id/edd-core     {:local/root "../../"}
   app-group-id/edd-core-io  {:local/root "../edd-core-io"}
+  app-group-id/edd-core-opensearch {:local/root "../edd-core-opensearch"}
   metosin/malli                         {:mvn/version "0.19.1"}
   com.github.seancorfield/honeysql      {:mvn/version "2.6.1147"}}
 
@@ -11,6 +12,7 @@
  {:build    {:deps       {io.github.clojure/tools.build {:mvn/version "0.10.6"}}
              :ns-default build}
   :test     {:extra-deps  {lambdaisland/kaocha   {:mvn/version "1.75.1190"}
+                           app-group-id/edd-core-aws {:local/root "../edd-core-aws"}
                            app-group-id/edd-core-io  {:local/root "../edd-core-io"}
                            app-group-id/edd-core-clj {:local/root "../edd-core-clj"}}
              :extra-paths ["test"]}

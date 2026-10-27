@@ -13,6 +13,7 @@
             [malli.core :as m]
             [malli.error :as me]
             [edd.dal :refer [with-init
+                             get-response-effects
                              get-events
                              get-max-event-seq
                              get-aggregate-id-by-identity
@@ -102,13 +103,12 @@
   :postgres
   [{:keys [invocation-id request-id interaction-id service-name] :as ctx} body]
   (log/debug "Storing request" (:commands body))
-  (let [receive-count (or
-                       (-> ctx :attributes :ApproximateReceiveCount)
-                       "-1")
-        receive-count-int (Integer/parseInt receive-count)
-        breadcrumbs (:breadcrumbs body)]
-    (jdbc/execute! *DB*
-                   [(str "INSERT INTO " (->table ctx :command_request_log) " (
+  (let [breadcrumbs
+        (:breadcrumbs body)
+
+        logged
+        (jdbc/execute-one! *DB*
+                           [(str "INSERT INTO " (->table ctx :command_request_log) " (
                                                          invocation_id,
                                                          request_id,
                                                          interaction_id,
@@ -119,18 +119,21 @@
                                                          data)
                             VALUES (?,?,?,?,?,?,?,?)
                             ON CONFLICT (request_id, breadcrumbs) DO UPDATE
-                            SET receive_count = command_request_log.receive_count + 1")
-                    invocation-id
-                    request-id
-                    interaction-id
-                    (breadcrumb-str breadcrumbs)
-                    service-name
-                    0
-                    receive-count-int
-                    (if (= breadcrumbs [0])
-                      body
-                      {:ref (vec
-                             (drop-last breadcrumbs))})])))
+                            SET receive_count = GREATEST(command_request_log.receive_count, 0) + 1
+                            RETURNING receive_count")
+                            invocation-id
+                            request-id
+                            interaction-id
+                            (breadcrumb-str breadcrumbs)
+                            service-name
+                            0
+                            0
+                            (if (= breadcrumbs [0])
+                              body
+                              {:ref (vec
+                                     (drop-last breadcrumbs))})]
+                           {:builder-fn rs/as-unqualified-lower-maps})]
+    (:receive_count logged)))
 
 (defn get-parent-breadcrumbs
   [breadcrumbs]
@@ -460,6 +463,22 @@
                       {:error (-> (m/explain PostgresEventStoreCtx ctx)
                                   (me/humanize))})))
     ctx))
+
+(defmethod get-response-effects
+  :postgres
+  [{:keys [request-id breadcrumbs service-name] :as ctx}]
+  {:pre [request-id breadcrumbs]}
+  (util/d-time
+   (format "Postgres get-response-effects, request-id: %s" request-id)
+   (let [effects
+         (jdbc/execute! *DB*
+                        [(str "SELECT data FROM " (->table ctx :command_store) "
+                               WHERE request_id=? AND breadcrumbs=? AND source_service=?")
+                         request-id
+                         (breadcrumb-str breadcrumbs)
+                         service-name]
+                        {:builder-fn rs/as-unqualified-kebab-maps})]
+     (vec (sort-by :breadcrumbs (map :data effects))))))
 
 (defmethod get-records
   :postgres

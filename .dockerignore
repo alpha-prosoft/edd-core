@@ -8,3 +8,5 @@ Makefile
 README.md
 target
 your-lambda.iml
+e2e/target
+e2e/*/target

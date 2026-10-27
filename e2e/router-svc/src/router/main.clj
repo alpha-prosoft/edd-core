@@ -2,9 +2,8 @@
   (:gen-class)
   (:require [edd.java-lambda-runtime.core :as runtime]
             [edd.router.core :as router]
-            [lambda.filters :as filters]))
+            [edd.sqs.distributor :as distributor]))
 
 (runtime/start
- {}
- router/handler
- :filters [filters/from-bucket])
+ (router/register (distributor/register {}))
+ router/handler)

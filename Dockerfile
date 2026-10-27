@@ -42,9 +42,22 @@ ARG BUILD_ID
 ENV BUILD_ID=${BUILD_ID}
 ARG BUILD_NUMBER
 ENV BUILD_NUMBER=${BUILD_NUMBER}
+# Release version from the pipeline, see version.sh.
+ARG APP_VERSION
+ENV APP_VERSION=${APP_VERSION}
 
-# Run the build script with proper error handling
-RUN chmod +x build.sh && ./build.sh
+ARG AWS_REGION
+ENV AWS_REGION=${AWS_REGION}
+
+# Run the build script with proper error handling. AWS credentials come from
+# the aws-credentials build secret: a shared credentials file or KEY=VALUE lines.
+RUN --mount=type=secret,id=aws-credentials,mode=0444,required=false \
+    creds=/run/secrets/aws-credentials; \
+    if [ -s "$creds" ]; then \
+      if grep -q '^\[' "$creds"; then export AWS_SHARED_CREDENTIALS_FILE="$creds"; \
+      else set -a; . "$creds"; set +a; fi; \
+    fi; \
+    chmod +x build.sh && ./build.sh
 
 RUN ls -la
 

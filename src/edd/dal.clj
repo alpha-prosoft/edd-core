@@ -53,6 +53,8 @@
   "Logs incoming command request for auditing and debugging.
    
    Input: ctx and body (command request)
+   Output: how many times this request (request-id + breadcrumbs) was logged
+   before, 0 for the first time; nil from a store that does not count.
    
    Realm-scoped: Request logs isolated per realm."
   (fn [{:keys [_commands] :as ctx} _body]
@@ -121,6 +123,14 @@
   [ctx body-fn]
   (log/info "Default event init")
   (body-fn ctx))
+
+(defmulti get-response-effects
+  "Effects a command stored, to rebuild its router messages for a duplicate
+   request.
+
+   Input: ctx with :request-id and :breadcrumbs of the command
+   Output: effects in stored order"
+  (fn [ctx] (:edd-event-store ctx)))
 
 (defmulti get-records
   "Retrieves all events and effects for a given interaction-id.

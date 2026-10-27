@@ -1,0 +1,9 @@
+{:deps {app-group-id/edd-core {:local/root "../../"}
+        io.undertow/undertow-core {:mvn/version "2.4.4.Final"}}
+ :paths ["src"]
+ :aliases {:build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
+                   :ns-default build}
+           :test {:extra-paths ["test"]}
+           :unit {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+                  :main-opts ["-m" "kaocha.runner" "unit"]
+                  :jvm-opts ["-Dclojure.tools.logging.factory=lambda.logging-local/slf4j-local-factory"]}}}

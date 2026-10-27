@@ -1,0 +1,26 @@
+- hosts: localhost
+  connection: local
+  tasks:
+    - include_role:
+        name: alpha-deploy-lib/resolve-params
+      vars:
+        stacks:
+        - type: 'BASE'
+          name: 'alpha-base'
+        - type: 'CORE'
+          name: 'alpha-base'
+        - type: 'API'
+          name: 'alpha-base'
+        - type: 'DYNAMODB'
+          name: 'main-prod'
+
+    - include_role:
+        name: alpha-deploy-lib/deploy-lambda
+      vars:
+        function_name: '{{ lookup("env", "RESOURCE_NAME") }}'
+        parameter_name: 'SvcFunction'
+        settings:
+          LambdaMemorySize: 1024
+          LambdaSnapStart: True
+          LambdaRuntime: java25
+          LambdaFunctionHandler: "lambda.Handler"

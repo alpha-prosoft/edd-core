@@ -1,19 +1,11 @@
 (ns edd.el.cmd-test
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [edd.el.cmd :as el-cmd]
             [edd.core :as edd]
-            [lambda.core :as core]
-            [lambda.filters :as fl]
-            [lambda.util :as util]
-            [lambda.test.fixture.client :refer [verify-traffic-edn] :as client]
-            [lambda.test.fixture.core :refer [mock-core]]
-            [lambda.api-test :refer [api-request]]
-            [lambda.uuid :as uuid]
+            [edd.el.cmd :as el-cmd]
+            [edd.test.fixture.runtime :as api]
             [edd.test.fixture.dal :as mock]
-            [sdk.aws.sqs :as sqs]
-            [edd.el.ctx :as el-ctx]
-            [lambda.request :as request]
-            [aws.aws :as aws])
+            [lambda.util :as util]
+            [lambda.uuid :as uuid])
   (:import (clojure.lang ExceptionInfo)))
 
 (def fixed-created-on "2026-05-01T00:00:00.000+00:00")
@@ -24,174 +16,146 @@
                                       ([_] fixed-created-on))]
       (t))))
 
-(def ctx (-> {}
-             (edd/reg-cmd :ssa (fn [_ _]))))
+(def ctx
+  (edd/reg-cmd {} :ssa (fn [_ _])))
 
 (deftest test-empty-commands-list
   (try
     (el-cmd/validate-commands ctx [])
     (catch ExceptionInfo ex
-      (is (= {:error "No commands present in request"}
-             (ex-data ex))))))
+      (is
+       (= {:error "No commands present in request"}
+          (ex-data ex))))))
 
-(defn register []
+(defn register
+  []
   (edd/reg-cmd mock/ctx
                :ping
                (fn [_ _] {:event-id :ping})))
 
 (deftest api-handler-test
-  (let [request-id (uuid/gen)
-        interaction-id (uuid/gen)
-        cmd {:request-id     request-id,
-             :interaction-id interaction-id,
-             :commands       [{:cmd-id :ping}]}]
-    (mock-core
-     :env {"Region" "eu-west-1"}
-     :invocations [(api-request cmd)]
-     (core/start
-      (register)
-      edd/handler
-      :filters [fl/from-api]
-      :post-filter fl/to-api)
+  (let [request-id
+        (uuid/gen)
 
-     (is (= [{:method  :get
-              :url     "http://mock/2018-06-01/runtime/invocation/next"}
-             {:url
-              "https://sqs.eu-west-1.amazonaws.com/local/local-glms-router-svc-response",
-              :method :post,
-              :body
-              (str "Action=SendMessage&MessageBody=%7B%22Records%22%3A%5B%7B%22key%22%3A%22response%2F"
-                   request-id
-                   "%2F0%2Flocal-test.json%22%7D%5D%7D")}
-             {:body   {:body            {:invocation-id  0
-                                         :request-id     request-id
-                                         :interaction-id interaction-id
-                                         :error          {:id ["missing required key"]}}
-                       :headers         {:Access-Control-Allow-Headers  "Id, VersionId, X-Authorization,Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
-                                         :Access-Control-Allow-Methods  "OPTIONS,POST,PUT,GET"
-                                         :Access-Control-Allow-Origin   "*"
-                                         :Access-Control-Expose-Headers "*"
-                                         :Content-Type                  "application/json"}
-                       :isBase64Encoded false
-                       :statusCode      500}
-              :method :post
-              :url    "http://mock/2018-06-01/runtime/invocation/0/response"}]
-            (mapv
-             #(select-keys % [:method :body :url])
-             (client/traffic-edn)))))))
+        interaction-id
+        (uuid/gen)]
+    (mock/with-mock-dal
+      (is
+       (= {:status 500
+           :body   {:invocation-id  0
+                    :request-id     request-id
+                    :interaction-id interaction-id
+                    :error          {:id ["missing required key"]}}}
+          (api/post (api/start (register))
+                    {:request-id     request-id
+                     :interaction-id interaction-id
+                     :commands       [{:cmd-id :ping}]})))
+
+      (testing "a failed command has nothing to route"
+        (is
+         (= []
+            (api/routed)))))))
 
 (deftest api-handler-response-test
+  (let [request-id
+        (uuid/gen)
 
-  (let [request-id (uuid/gen)
-        interaction-id (uuid/gen)
-        id (uuid/gen)
-        cmd {:request-id     request-id,
-             :interaction-id interaction-id,
-             :user           {:selected-role :group-1}
-             :commands       [{:cmd-id :ping
-                               :id     id}]}]
+        interaction-id
+        (uuid/gen)
+
+        id
+        (uuid/gen)]
     (mock/with-mock-dal
       {:keep-meta true}
-      (with-redefs [sqs/sqs-publish (fn [{:keys [message]}]
-                                      (is (= {:Records [{:key (str "response/"
-                                                                   request-id
-                                                                   "/0/local-test.json")}]}
-                                             (util/to-edn message))))]
-        (mock-core
-         :env {"Region" "eu-west-1"}
-         :invocations [(api-request cmd)]
-         (core/start
-          (register)
-          edd/handler
-          :filters [fl/from-api]
-          :post-filter fl/to-api)
-         (do
-           (mock/verify-state :event-store [{:event-id       :ping
-                                             :event-seq      1
-                                             :id             id
-                                             :request-id     request-id
-                                             :interaction-id interaction-id
-                                             :meta           {:realm :test
-                                                              :created-on fixed-created-on
-                                                              :invocation-id 0
-                                                              :user  {:email "john.smith@example.com"
-                                                                      :id    "john.smith@example.com"
-                                                                      :role  :group-1
-                                                                      :roles [:group-1
-                                                                              :group-3
-                                                                              :group-2]}}}])
-           (verify-traffic-edn
-            [{:method  :get
-              :timeout 90000000
-              :url     "http://mock/2018-06-01/runtime/invocation/next"}
-             {:body   {:body            (util/to-json
-                                         {:result         {:success    true
-                                                           :effects    []
-                                                           :events     1
-                                                           :meta       [{:ping {:id id}}]
-                                                           :identities 0}
-                                          :invocation-id  0
+      (is
+       (= {:status 200
+           :body   {:result         {:success    true
+                                     :effects    []
+                                     :events     1
+                                     :meta       [{:ping {:id id}}]
+                                     :identities 0}
+                    :invocation-id  0
+                    :request-id     request-id
+                    :interaction-id interaction-id}}
+          (api/post (api/start (register))
+                    {:request-id     request-id
+                     :interaction-id interaction-id
+                     :commands       [{:cmd-id :ping
+                                       :id     id}]})))
+
+      (testing "the events are routed"
+        (is
+         (= [[id]]
+            (map #(map :id (get-in % [:resp :events])) (api/routed)))))
+
+      (testing "the events carry the authenticated user and realm"
+        (mock/verify-state :event-store [{:event-id       :ping
+                                          :event-seq      1
+                                          :id             id
                                           :request-id     request-id
-                                          :interaction-id interaction-id})
-                       :headers         {:Access-Control-Allow-Headers  "Id, VersionId, X-Authorization,Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
-                                         :Access-Control-Allow-Methods  "OPTIONS,POST,PUT,GET"
-                                         :Access-Control-Allow-Origin   "*"
-                                         :Access-Control-Expose-Headers "*"
-                                         :Content-Type                  "application/json"}
-                       :isBase64Encoded false
-                       :statusCode      200}
-              :method :post
-              :url    "http://mock/2018-06-01/runtime/invocation/0/response"}])))))))
+                                          :interaction-id interaction-id
+                                          :meta           {:realm         :test
+                                                           :created-on    fixed-created-on
+                                                           :invocation-id 0
+                                                           :user          (dissoc api/user :realm)}}])))))
 
-(deftest test-cache-partitioning
-  (let [ctx {:service-name :local-test
-             :breadcrumbs  "0"
-             :request-id   "1"}
-        resp-1 {:effects [{:a :b}]}
+(deftest repeated-request-reports-attempt-and-cached-response-test
+  (let [request
+        {:request-id     (uuid/gen)
+         :interaction-id (uuid/gen)
+         :commands       [{:cmd-id :ping
+                           :id     (uuid/gen)}]}]
+    (mock/with-mock-dal
+      (let [ctx
+            (api/start (register))
 
-        resp-2 {:effects [{:a :b} {:a :b} {:a :b}]}]
-    (is (= (assoc resp-1
-                  :cache-result
-                  {:key "response/1/0/local-test.json"})
-           (el-cmd/resp->cache-partitioned ctx resp-1)))
-    (is (= (assoc resp-2
-                  :cache-result
-                  [{:key "response/1/0/local-test-part.0.json"}
-                   {:key "response/1/0/local-test-part.1.json"}])
-           (el-cmd/resp->cache-partitioned (el-ctx/set-effect-partition-size ctx 2)
-                                           resp-2)))))
+            handler-info
+            (fn []
+              (get-in (api/post ctx request) [:body :meta]))]
+        (testing "nothing for the first execution"
+          (is
+           (nil?
+            (handler-info))))
 
-(deftest enqueue-response
-  (binding [request/*request* (atom {:cache-keys [{:key "response/0/0/local-test-0.json"}
-                                                  {:key "response/1/0/local-test-part.0.json"}
-                                                  {:key "response/1/0/local-test-part.1.json"}
-                                                  {:key "response/2/0/local-test-2.json"}]})]
-    (let [messages (atom [])]
-      (with-redefs [sqs/sqs-publish (fn [{:keys [message]}]
-                                      (swap! messages #(conj % message)))]
-        (aws/enqueue-response ctx {})
-        (is (= [{:Records [{:key "response/0/0/local-test-0.json"}]}
-                {:Records [{:key "response/1/0/local-test-part.0.json"}]}
-                {:Records [{:key "response/1/0/local-test-part.1.json"}]}
-                {:Records [{:key "response/2/0/local-test-2.json"}]}]
-               (map
-                #(util/to-edn %)
-                @messages))))))
-  (binding [request/*request* (atom {:cache-keys [{:key "response/0/0/local-test-0.json"}
-                                                  [{:key "response/1/0/local-test-part.0.json"}
-                                                   {:key "response/1/0/local-test-part.1.json"}]
-                                                  {:key "response/2/0/local-test-2.json"}]})]
-    (let [messages (atom [])]
-      (with-redefs [sqs/sqs-publish (fn [{:keys [message]}]
-                                      (swap! messages #(conj % message)))]
-        (aws/enqueue-response ctx {})
-        (is (= [{:Records [{:key "response/0/0/local-test-0.json"}]}
-                {:Records [{:key "response/1/0/local-test-part.0.json"}]}
-                {:Records [{:key "response/1/0/local-test-part.1.json"}]}
-                {:Records [{:key "response/2/0/local-test-2.json"}]}]
-               (map
-                #(util/to-edn %)
-                @messages)))))))
+        (testing "a repeated request is answered from the stored response"
+          (is
+           (= {:handler {:attempt 1 :cached true}}
+              (handler-info)))
+
+          (is
+           (= {:handler {:attempt 2 :cached true}}
+              (handler-info))))
+
+        (testing "the command ran once"
+          (is
+           (= 1
+              (count (mock/peek-state :event-store)))))))))
+
+(deftest rerun-after-concurrent-modification-reports-attempt-test
+  (let [failures
+        (atom 1)
+
+        store-results
+        el-cmd/store-results]
+    (mock/with-mock-dal
+      (with-redefs [el-cmd/store-results (fn [ctx resp]
+                                           (when (pos? (long @failures))
+                                             (swap! failures dec)
+                                             (throw (ex-info "taken" {:error {:key :concurrent-modification}})))
+                                           (store-results ctx resp))]
+        (let [response
+              (api/post (api/start (register))
+                        {:request-id     (uuid/gen)
+                         :interaction-id (uuid/gen)
+                         :commands       [{:cmd-id :ping
+                                           :id     (uuid/gen)}]})]
+          (is
+           (= 200
+              (:status response)))
+
+          (is
+           (= {:handler {:attempt 1}}
+              (get-in response [:body :meta]))))))))
 
 (deftest test-retry-logic
   (testing "regular exception"
@@ -203,7 +167,8 @@
                       3)
         (is false)
         (catch Exception _e
-          (is (= 1 @capture!))))))
+          (is
+           (= 1 @capture!))))))
 
   (testing "special exception"
     (let [capture! (atom 0)]
@@ -215,6 +180,9 @@
          3)
         (is false)
         (catch Exception e
-          (is (= 3 @capture!))
-          (is (= "boom"
-                 (ex-message e))))))))
+          (is
+           (= 3 @capture!))
+
+          (is
+           (= "boom"
+              (ex-message e))))))))

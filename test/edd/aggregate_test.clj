@@ -1,12 +1,7 @@
 (ns edd.aggregate-test
-  (:require [edd.core :as edd]
-            [edd.dal :as dal]
-            [clojure.tools.logging :as log]
+  (:require [clojure.test :refer [deftest is]]
+            [edd.core :as edd]
             [edd.el.event :as event]
-            [clojure.test :refer [deftest testing is]]
-            [lambda.util :as util]
-            [edd.s3.view-store :as s3-view-store]
-            [edd.elastic.view-store :as elastic-view-store]
             [edd.test.fixture.dal :as mock]
             [lambda.uuid :as uuid]))
 
@@ -55,54 +50,3 @@
                             :event-seq 2
                             :id        cmd-id}}
            agg))))
-
-(deftest test-apply-cmd-storing-error
-  (with-redefs [dal/get-events (fn [_]
-                                 [{:event-id  :event-1
-                                   :event-seq 1
-                                   :id        cmd-id
-                                   :k1        "a"}
-                                  {:event-id  :event-2
-                                   :event-seq 2
-                                   :id        cmd-id
-                                   :k2        "b"}])]
-
-    (is (thrown? Exception
-                 (event/handle-event (-> apply-ctx
-                                         elastic-view-store/register
-                                         (assoc :apply {:aggregate-id cmd-id
-                                                        :apply        :cmd-1})))))))
-
-(deftest test-apply-cmd-storing-response-error
-  (with-redefs [dal/get-events (fn [_]
-                                 [{:event-id  :event-1
-                                   :event-seq 1
-                                   :id        cmd-id
-                                   :k1        "a"}
-                                  {:event-id  :event-2
-                                   :event-seq 2
-                                   :id        cmd-id
-                                   :k2        "b"}])
-                util/http-get (fn [_url _request & {:keys [raw]}]
-                                {:status 404})
-                s3-view-store/store-to-s3 (fn [_ctx _aggregate]
-                                            nil)
-                s3-view-store/get-from-s3 (fn [_ctx _id]
-                                            nil)
-                util/http-post (fn [url request & {:keys [raw]}]
-                                 {:status 303
-                                  :body   "Sorry"})]
-
-    (try
-      (event/handle-event (-> apply-ctx
-                              elastic-view-store/register
-                              (assoc
-                               :apply {:aggregate-id cmd-id})))
-      (catch Exception e
-        (let [expected {:error {:status  303
-                                :message "Sorry"}}]
-          (is (= expected
-                 (ex-data e)))
-          (when (not= expected
-                      (ex-data e))
-            (log/info "Unexpected test exception" e)))))))

@@ -4,7 +4,7 @@
             [lambda.request :as request]
             [edd.el.cmd :as cmd]
             [edd.schema :as s]
-            [sdk.aws.s3 :as s3]
+            [edd.distribution :as distribution]
             [edd.el.event :as event]
             [edd.el.query :as query]
             [lambda.util :as util]
@@ -117,12 +117,33 @@
            "command's persisted events. (chain ctx events) returns "
            "the effects; inspect, enrich or drop them.")}
      [:fn fn?]]
+    [:publish-filter
+     {:optional true
+      :description
+      (str "(fn [ctx {:keys [destination messages]} chain]) - wraps "
+           "publishing through the distribution transport (router "
+           "messages, effects, events). Call (chain ctx request) to "
+           "proceed; it returns [{:id :success}].")}
+     [:fn fn?]]
     [:apply-filter
      {:optional true
       :description
       (str "(fn [ctx apply chain]) - wraps event application "
            "(aggregate materialization). Not calling the chain "
            "skips it.")}
+     [:fn fn?]]
+    [:invocation-ctx
+     {:optional true
+      :description
+      (str "(fn [ctx] ctx') - long-running runtimes call it for every "
+           "invocation, e.g. to renew credentials that expire.")}
+     [:fn fn?]]
+    [:resolve-user
+     {:optional true
+      :description
+      (str "(fn [ctx]) - user of an API request, used by "
+           "lambda.http. Returns ctx with :user, or "
+           "{:error ..}.")}
      [:fn fn?]]
     [:schema
      {:optional true
@@ -166,6 +187,29 @@
                       {:explain (-> (m/explain EddCoreRegFeature options)
                                     (me/humanize))})))
     (edd-ctx/put-feature ctx options)))
+
+(def EddCoreDepsResolver
+  (m/schema
+   [:map
+    [:resolver
+     {:description
+      (str "{:resolve (fn [ctx config request]) :init (fn [ctx config] config')}. "
+           "request is {:service :query :meta :request-id :interaction-id}, "
+           ":resolve answers {:result value} or {:error error}; the optional "
+           ":init runs once in init-features and returns the config :resolve gets.")}
+     [:map
+      [:resolve [:fn fn?]]
+      [:init {:optional true} [:fn fn?]]]]]))
+
+(defn reg-deps-resolver
+  "Registers how remote deps (deps with :service) are resolved; the config
+   carries the :resolver implementation and its settings. Registering again
+   replaces the resolver."
+  [ctx config]
+  (when-not (m/validate EddCoreDepsResolver config)
+    (throw (ex-info "Invalid deps resolver registration"
+                    {:explain (me/humanize (m/explain EddCoreDepsResolver config))})))
+  (edd-ctx/put-deps-resolver ctx config))
 
 (defn reg-event
   [ctx event-id reg-fn]
@@ -313,15 +357,16 @@
                    :else (do
                            (log/error item)
                            {:error :invalid-request}))]
-        (if (:error resp)
-          {:error          (:error resp)
-           :invocation-id  (:invocation-id ctx)
-           :request-id     (:request-id item)
-           :interaction-id (:interaction-id ctx)}
-          {:result         resp
-           :invocation-id  (:invocation-id ctx)
-           :request-id     (:request-id item)
-           :interaction-id (:interaction-id ctx)}))
+        (cond-> (if (:error resp)
+                  {:error          (:error resp)
+                   :invocation-id  (:invocation-id ctx)
+                   :request-id     (:request-id item)
+                   :interaction-id (:interaction-id ctx)}
+                  {:result         resp
+                   :invocation-id  (:invocation-id ctx)
+                   :request-id     (:request-id item)
+                   :interaction-id (:interaction-id ctx)})
+          (:handler (meta resp)) (assoc :meta {:handler (:handler (meta resp))})))
       (catch Exception e
         (do
           (log/error e)
@@ -389,44 +434,6 @@
       ctx
       :resp responses))))
 
-(defn fetch-from-s3
-  [ctx {:keys [s3]
-        :as msg}]
-  (if s3
-    (-> (s3/get-object ctx msg)
-        slurp
-        util/to-edn)
-    msg))
-
-(defn filter-queue-request
-  "If request is coming from queue we need to get out all request bodies"
-  [{:keys [body] :as ctx}]
-  (if (contains? body :Records)
-    (let [queue-body (mapv
-                      (fn [it]
-                        (->> it
-                             :body
-                             util/to-edn
-                             (fetch-from-s3 ctx)))
-                      (-> body
-                          (:Records)))]
-      (log/infof "Request From queue with batch size %s"
-                 (count queue-body))
-      (-> ctx
-          (assoc :body queue-body
-                 :queue-request true)))
-
-    (assoc ctx :body [body]
-           :queue-request false)))
-
-(defn prepare-response
-  "Wrap non error result into :result keyword"
-  [{:keys [resp] :as ctx}]
-  (log/infof "Preparing response. Is from queue: %s" (:queue-request ctx))
-  (if (:queue-request ctx)
-    resp
-    (first resp)))
-
 (def schema
   [:and
    [:map
@@ -463,20 +470,23 @@
     #(dal/with-init
        % body-fn)))
 
+(defn- assert-preconditions!
+  [ctx]
+  (distribution/validate! ctx))
+
 (defn handler
   [ctx body]
   (log/debug "Handler body" body)
   (log/debug "Context" ctx)
+  (assert-preconditions! ctx)
   (if (:skip body)
     (do (log/info "Skipping request")
         {})
     (with-stores
       ctx
-      #(-> (assoc % :body body)
-           (filter-queue-request)
-           (validate-request)
-           (dispatch-request)
-           (prepare-response)))))
+      #(let [validated
+             (validate-request (assoc % :body [body]))]
+         (first (:resp (dispatch-request validated)))))))
 
 (defn -main
   [& _args]

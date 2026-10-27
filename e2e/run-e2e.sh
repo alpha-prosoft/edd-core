@@ -6,6 +6,7 @@
 #   1. POST a :ping command via API Gateway.
 #   2. ping --effect--> router --> pong --effect--> router --> ping ... (hop-guarded).
 #   3. Upload a file to the import S3 bucket and verify the bucket-filter command.
+# run-e2e-local.sh runs the same e2e/it suite on Undertow + Kafka + Postgres.
 #
 # Designed to be idempotent: every resource is a CloudFormation stack, deployed
 # (created or updated) in place. Re-running updates rather than recreates.
@@ -25,7 +26,7 @@ CF="${E2E_DIR}/cloudformation"
 # The E2E runs under its OWN isolated environment name (NOT the build's
 # EnvironmentNameLower) so its resources never collide with real infra in the
 # account -- in particular the bucket names edd-core hardcodes from the env:
-# {account}-{env}-sqs (response cache) and {account}-{env}-aggregates (view store).
+# {account}-{env}-sqs (oversized SQS bodies) and {account}-{env}-aggregates (view store).
 # Override with E2E_ENV if needed.
 ENV="${E2E_ENV:-cqrs-e2e}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-eu-west-1}}"
@@ -113,7 +114,28 @@ IMPORT_QUEUE_ARN="$(output "${ENV}-e2e-infra" ImportQueueArn)"
 IMPORT_BUCKET="$(output "${ENV}-e2e-infra" ImportBucketName)"
 log "deployment-bucket=${DEPLOY_BUCKET} import-bucket=${IMPORT_BUCKET}"
 
-# 3. Build the three lambda uberjars against local edd-core.
+# 3. Render ping-svc from the edd-core-scaffold template, then overlay the e2e
+#    domain (ping.clj), the no-auth filters and the uberjar build. Running the
+#    generated unit tests here proves the template itself still works.
+declare -A SVC_DIR=([ping-svc]="target/ping-svc" [pong-svc]="pong-svc" [router-svc]="router-svc")
+PING_DIR="${E2E_DIR}/${SVC_DIR[ping-svc]}"
+
+log "Rendering ping-svc from the edd-core-scaffold template into ${PING_DIR}"
+rm -rf "${PING_DIR}"
+( cd "${ROOT_DIR}/modules/edd-core-scaffold" \
+  && clojure -M -m edd.scaffold ping-svc \
+       --dir "${PING_DIR}" \
+       --edd-core-root "${ROOT_DIR}" \
+       --runtime lambda --distributor sqs \
+       --event-store dynamodb --view-store s3 \
+       --deploy none </dev/null )
+cp -r "${E2E_DIR}/ping-svc/." "${PING_DIR}/"
+( cd "${PING_DIR}" && clojure -M:test:unit </dev/null )
+ok "Rendered ping-svc passes its generated tests"
+
+# 4. Build the three lambda uberjars against local edd-core.
+BUILD_ALIAS='{:aliases {:build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}} :ns-default build}}}'
+
 build_uber() {
   local dir="$1"; local main="$2"; local artifact="$3"
   log "Building uberjar ${artifact} (main ${main})"
@@ -130,13 +152,13 @@ build_uber() {
        Region="${REGION}" \
        AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-dummy}" \
        AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-dummy}" \
-       clojure -T:build uber :main "${main}" :artifact "\"${artifact}\"" )
+       clojure -Sdeps "${BUILD_ALIAS}" -T:build uber :main "${main}" :artifact "\"${artifact}\"" )
 }
-build_uber ping-svc   ping.main   ping-svc
-build_uber pong-svc   pong.main   pong-svc
-build_uber router-svc router.main router-svc
+build_uber "${SVC_DIR[ping-svc]}"   ping-svc.main ping-svc
+build_uber "${SVC_DIR[pong-svc]}"   pong.main     pong-svc
+build_uber "${SVC_DIR[router-svc]}" router.main   router-svc
 
-# 4. Upload artifacts under a timestamped, build-tagged key. A unique key per
+# 5. Upload artifacts under a timestamped, build-tagged key. A unique key per
 #    run means CloudFormation always sees a new artifact and republishes the
 #    BUILD alias -- no reliance on jar-hash determinism, no stale/cached version.
 #    (The CodeSha256 check after each deploy proves the alias serves this jar.)
@@ -146,10 +168,10 @@ for svc in ping-svc pong-svc router-svc; do
   key="${svc}-${RUN_TAG}.jar"
   S3KEY[$svc]="${key}"
   log "Uploading ${svc}.jar -> s3://${DEPLOY_BUCKET}/${key}"
-  aws s3 cp "${E2E_DIR}/${svc}/target/${svc}.jar" "s3://${DEPLOY_BUCKET}/${key}" --region "${REGION}"
+  aws s3 cp "${E2E_DIR}/${SVC_DIR[$svc]}/target/${svc}.jar" "s3://${DEPLOY_BUCKET}/${key}" --region "${REGION}"
 done
 
-# 5. API Gateway first, so its URL/id can be injected into the service lambdas
+# 6. API Gateway first, so its URL/id can be injected into the service lambdas
 #    (cross-service remote dependencies POST to {ApiUrl}/private/{stage}/{svc}/query).
 deploy "${ENV}-e2e-api" "${CF}/api.yaml" \
   "EnvironmentNameLower=${ENV}" "Region=${REGION}"
@@ -162,29 +184,29 @@ aws apigateway create-deployment --region "${REGION}" \
   --rest-api-id "${API_ID}" --stage-name e2e >/dev/null
 ok "API deployed at ${API_URL} (id ${API_ID})"
 
-# 6. Router lambda (creates the {env}-router-svc-response queue + mapping).
+# 7. Router lambda (creates the {env}-router-svc-response queue + mapping).
 deploy "${ENV}-e2e-router" "${CF}/lambda-router.yaml" \
   "EnvironmentNameLower=${ENV}" "Region=${REGION}" \
   "DeploymentBucketName=${DEPLOY_BUCKET}" "S3Key=${S3KEY[router-svc]}"
-verify_deployed_code "${ENV}-e2e-router-svc" "${E2E_DIR}/router-svc/target/router-svc.jar"
+verify_deployed_code "${ENV}-e2e-router-svc" "${E2E_DIR}/${SVC_DIR[router-svc]}/target/router-svc.jar"
 
-# 7. ping + pong lambdas (ping also consumes the import queue). Both get the
+# 8. ping + pong lambdas (ping also consumes the import queue). Both get the
 #    ApiUrl (for remote deps) and CQRSApiId (for the apigateway invoke grant).
 deploy "${ENV}-e2e-ping" "${CF}/lambda-svc.yaml" \
   "EnvironmentNameLower=${ENV}" "ResourceName=ping-svc" "Region=${REGION}" \
   "DeploymentBucketName=${DEPLOY_BUCKET}" "S3Key=${S3KEY[ping-svc]}" \
   "EnableImport=true" "ImportQueueArn=${IMPORT_QUEUE_ARN}" \
   "ApiUrl=${API_URL}" "CQRSApiId=${API_ID}"
-verify_deployed_code "${ENV}-e2e-ping-svc" "${E2E_DIR}/ping-svc/target/ping-svc.jar"
+verify_deployed_code "${ENV}-e2e-ping-svc" "${E2E_DIR}/${SVC_DIR[ping-svc]}/target/ping-svc.jar"
 
 deploy "${ENV}-e2e-pong" "${CF}/lambda-svc.yaml" \
   "EnvironmentNameLower=${ENV}" "ResourceName=pong-svc" "Region=${REGION}" \
   "DeploymentBucketName=${DEPLOY_BUCKET}" "S3Key=${S3KEY[pong-svc]}" \
   "EnableImport=false" "ImportQueueArn=none" \
   "ApiUrl=${API_URL}" "CQRSApiId=${API_ID}"
-verify_deployed_code "${ENV}-e2e-pong-svc" "${E2E_DIR}/pong-svc/target/pong-svc.jar"
+verify_deployed_code "${ENV}-e2e-pong-svc" "${E2E_DIR}/${SVC_DIR[pong-svc]}/target/pong-svc.jar"
 
-# 8. Upload a file to the import bucket (the infra action behind the S3 bucket
+# 9. Upload a file to the import bucket (the infra action behind the S3 bucket
 #    filter test). The object's aggregate id == request-id segment of the key.
 #    The assertion itself lives in the Clojure integration test.
 OBJ_ID="$(uuid)"
@@ -193,11 +215,54 @@ log "Uploading import object s3://${IMPORT_BUCKET}/${KEY}"
 echo '{"e2e":"object-upload"}' >/tmp/e2e-object.json
 aws s3 cp /tmp/e2e-object.json "s3://${IMPORT_BUCKET}/${KEY}" --region "${REGION}"
 
-# 9. Run the Clojure integration tests against the deployed stack.
+# 10. Run the Clojure integration tests against the deployed stack.
 log "Running Clojure integration tests (e2e/it) against ${API_URL}"
+#     The fan-out tests use these request ids so step 11 finds their responses
+#     in the response cache bucket.
+CACHED_REQUEST_ID="$(uuid)"
+INLINE_REQUEST_ID="$(uuid)"
 ( cd "${E2E_DIR}/it" \
   && ApiUrl="${API_URL}" \
      E2E_IMPORT_OBJECT_ID="${OBJ_ID}" \
+     E2E_CACHED_REQUEST_ID="${CACHED_REQUEST_ID}" \
+     E2E_INLINE_REQUEST_ID="${INLINE_REQUEST_ID}" \
      clojure -M:it )
+
+# 11. The response cache in S3: pong-svc (cache, 3 effects per part) stored its
+#     7 effect fan-out in 3 parts, the events with the first one; ping-svc (no
+#     cache) stored nothing.
+CACHE_BUCKET="${ACCOUNT}-${ENV}-sqs"
+
+cached_keys() {
+  aws s3api list-objects-v2 --bucket "${CACHE_BUCKET}" --prefix "response/$1/" \
+    --query 'Contents[].Key' --output json --region "${REGION}" | jq -r '(. // []) | sort | .[]'
+}
+
+cached_counts() {
+  aws s3 cp "s3://${CACHE_BUCKET}/$1" - --region "${REGION}" \
+    | jq -c '[(.resp.effects | length), (.resp.events | length)]'
+}
+
+EXPECTED_KEYS="$(printf 'response/%s/0/pong-svc-part.%s.json\n' \
+  "${CACHED_REQUEST_ID}" 0 "${CACHED_REQUEST_ID}" 1 "${CACHED_REQUEST_ID}" 2)"
+ACTUAL_KEYS="$(cached_keys "${CACHED_REQUEST_ID}")"
+if [ "${ACTUAL_KEYS}" != "${EXPECTED_KEYS}" ]; then
+  err "pong-svc response cache: expected 3 parts in s3://${CACHE_BUCKET}, found: ${ACTUAL_KEYS:-none}"
+  exit 1
+fi
+
+ACTUAL_COUNTS="$(for key in ${ACTUAL_KEYS}; do cached_counts "${key}"; done | tr '\n' ' ')"
+if [ "${ACTUAL_COUNTS}" != "[3,1] [3,0] [1,0] " ]; then
+  err "pong-svc response cache: expected [effects,events] per part [3,1] [3,0] [1,0], found: ${ACTUAL_COUNTS}"
+  exit 1
+fi
+ok "pong-svc cached its response in 3 S3 parts: ${ACTUAL_COUNTS}"
+
+INLINE_KEYS="$(cached_keys "${INLINE_REQUEST_ID}")"
+if [ -n "${INLINE_KEYS}" ]; then
+  err "ping-svc has no response cache but stored: ${INLINE_KEYS}"
+  exit 1
+fi
+ok "ping-svc sent its response inline, nothing in S3"
 
 ok "All E2E tests passed."

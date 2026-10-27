@@ -7,21 +7,12 @@
             [edd.el.cmd :as cmd]
             [edd.el.event :as event]
             [edd.el.query :as query]
-            [edd.elastic.view-store :as elastic-view-store]
             [edd.memory.event-store :as event-store]
             [edd.search :as search]
+            [edd.test.fixture.runtime :as api]
             [edd.test.fixture.dal :as mock]
-            [lambda.api-test :as api]
-            [lambda.core :as core]
-            [lambda.filters :as fl]
-            [lambda.s3-test :as s3]
-            [lambda.test.fixture.client :as client :refer [verify-traffic-edn]]
-            [lambda.test.fixture.core :refer [mock-core]]
             [lambda.util :as util]
-            [lambda.uuid :as uuid]
-            [sdk.aws.common :as sdk-common]
-            [sdk.aws.sqs :as sqs])
-  (:import (clojure.lang ExceptionInfo)))
+            [lambda.uuid :as uuid]))
 
 (def fixed-created-on "2026-05-01T00:00:00.000+00:00")
 
@@ -82,7 +73,6 @@
                           (fn [_ctx _cmd] {:query-id :test-query})}
                    :id-fn (fn [dps _cmd]
                             (get-in dps [:test-dps :id])))
-      (edd/reg-cmd :object-uploaded dummy-command-handler)
       (edd/reg-cmd :error-cmd (fn [_ctx _cmd]
                                 (throw (ex-info "Error"
                                                 {:error "Some error"}))))
@@ -217,148 +207,61 @@
 (def request-id #uuid "1111b7b5-9f50-4dc4-86d1-2e4fe1f6d491")
 (def interaction-id #uuid "2222b7b5-9f50-4dc4-86d1-2e4fe1f6d491")
 
-(deftest test-s3-bucket-request
-  (mock/with-mock-dal
-    (with-redefs [sdk-common/create-date (fn [] "20200426T061823Z")
-                  uuid/gen (fn [] request-id)
-                  key (str "test/2021-12-27/" interaction-id "/"
-                           request-id)
-                  sqs/sqs-publish (fn [{:keys [message] :as _ctx}]
-                                    (is (= {:Records [{:key (str "response/"
-                                                                 request-id
-                                                                 "/0/local-test.json")}]}
-                                           (util/to-edn message))))]
-      (mock-core
-       :invocations [(s3/records key)]
-       :requests [{:get  (str "https://example-bucket.s3.eu-central-1.amazonaws.com/"
-                              key)
-                   :body (char-array "Of something")}]
-       (core/start
-        (prepare {})
-        edd/handler
-        :filters [fl/from-bucket])
-       (verify-traffic-edn [{:method  :get
-                             :timeout 90000000
-                             :url     "http://mock/2018-06-01/runtime/invocation/next"}
-                            {:as              :stream
-                             :connect-timeout 300
-                             :headers         {"Authorization"        "AWS4-HMAC-SHA256 Credential=/20200426/eu-central-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=5c9b0ebe8bc4504c8885115a1699e4d6d3e8d0078aa57e44cff9a8a4d37e0779"
-                                               "x-amz-content-sha256" "UNSIGNED-PAYLOAD"
-                                               "x-amz-date"           "20200426T061823Z"
-                                               "x-amz-security-token" ""}
-                             :idle-timeout    5000
-                             :method          :get
-                             :url             "https://example-bucket.s3.eu-central-1.amazonaws.com/test/2021-12-27/2222b7b5-9f50-4dc4-86d1-2e4fe1f6d491/1111b7b5-9f50-4dc4-86d1-2e4fe1f6d491"}
-                            {:body   {:result         {:effects    [{:cmd-id       :fx-command
-                                                                     :id           #uuid "22222111-1111-1111-1111-111111111111"
-                                                                     :service-name :local-test}]
-                                                       :events     1
-                                                       :identities 0
-                                                       :meta       [{:object-uploaded {:id #uuid "1111b7b5-9f50-4dc4-86d1-2e4fe1f6d491"}}]
-                                                       :success    true}
-                                      :invocation-id  0
-                                      :interaction-id interaction-id
-                                      :request-id     request-id}
-                             :method :post
-                             :url    "http://mock/2018-06-01/runtime/invocation/0/response"}])))))
+(defn- verify-distributed-response
+  []
+  (let [[router-record & more]
+        (api/routed)]
+    (is
+     (empty? more))
+
+    (is
+     (= :local-test
+        (:service router-record)))
+
+    (is
+     (= [:fx-command]
+        (map #(get-in % [:commands 0 :cmd-id]) (get-in router-record [:resp :effects]))))))
+
+(def api-response
+  {:status 200
+   :body   {:result         {:success    true
+                             :effects    [{:id           fx-id
+                                           :cmd-id       :fx-command
+                                           :service-name :local-test}]
+                             :events     1
+                             :meta       [{:dummy-cmd {:id cmd-id}}]
+                             :identities 0}
+            :invocation-id  0
+            :request-id     request-id
+            :interaction-id interaction-id}})
 
 (deftest test-api-request-with-fx
-  (testing "Test that user is added to events and summary is properly returned"
+  (testing "Test that summary is properly returned and effects are routed"
     (mock/with-mock-dal
-      (with-redefs [sqs/sqs-publish (fn [{:keys [message] :as _ctx}]
-                                      (is (= {:Records [{:key (str "response/"
-                                                                   request-id
-                                                                   "/0/local-test.json")}]}
-                                             (util/to-edn message))))]
-        (mock-core
-         :env {"Region" "eu-west-1"}
-         :invocations [(api/api-request
-                        {:commands       [{:cmd-id :dummy-cmd,
-                                           :bla    "ble",
-                                           :id     cmd-id}],
-                         :user           {:selected-role :group-2}
-                         :request-id     request-id,
-                         :interaction-id interaction-id})]
+      (is
+       (= api-response
+          (api/post (api/start (prepare {}))
+                    {:commands       [{:cmd-id :dummy-cmd
+                                       :bla    "ble"
+                                       :id     cmd-id}]
+                     :request-id     request-id
+                     :interaction-id interaction-id})))
 
-         :requests [{:get  "https://example-bucket.s3.eu-central-1.amazonaws.com/test/key"
-                     :body (char-array "Of something")}]
-         (core/start
-          (prepare {})
-          edd/handler
-          :filters [fl/from-api]
-          :post-filter fl/to-api)
-         (verify-traffic-edn [{:method  :get
-                               :timeout 90000000
-                               :url     "http://mock/2018-06-01/runtime/invocation/next"}
-                              {:body   {:body            (util/to-json
-                                                          {:result         {:success    true
-                                                                            :effects    [{:id           fx-id
-                                                                                          :cmd-id       :fx-command
-                                                                                          :service-name :local-test}]
-                                                                            :events     1
-                                                                            :meta       [{:dummy-cmd {:id cmd-id}}]
-                                                                            :identities 0}
-                                                           :invocation-id  0
-                                                           :request-id     request-id
-                                                           :interaction-id interaction-id})
-                                        :headers         {:Access-Control-Allow-Headers  "Id, VersionId, X-Authorization,Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
-                                                          :Access-Control-Allow-Methods  "OPTIONS,POST,PUT,GET"
-                                                          :Access-Control-Allow-Origin   "*"
-                                                          :Access-Control-Expose-Headers "*"
-                                                          :Content-Type                  "application/json"}
-                                        :isBase64Encoded false
-                                        :statusCode      200}
-                               :method :post
-                               :url    "http://mock/2018-06-01/runtime/invocation/0/response"}]))))))
+      (verify-distributed-response))))
 
 (deftest test-api-request-single-command
   (testing "Test if sending single command works on api"
     (mock/with-mock-dal
-      (with-redefs [sqs/sqs-publish (fn [{:keys [message] :as _ctx}]
-                                      (is (= {:Records [{:key (str "response/"
-                                                                   request-id
-                                                                   "/0/local-test.json")}]}
-                                             (util/to-edn message))))]
-        (mock-core
-         :env {"Region" "eu-west-1"}
-         :invocations [(api/api-request
-                        {:command        {:cmd-id :dummy-cmd,
-                                          :bla    "ble",
-                                          :id     cmd-id},
-                         :user           {:selected-role :group-2}
-                         :request-id     request-id,
-                         :interaction-id interaction-id})]
+      (is
+       (= api-response
+          (api/post (api/start (prepare {}))
+                    {:command        {:cmd-id :dummy-cmd
+                                      :bla    "ble"
+                                      :id     cmd-id}
+                     :request-id     request-id
+                     :interaction-id interaction-id})))
 
-         :requests [{:get  "https://example-bucket.s3.eu-central-1.amazonaws.com/test/key"
-                     :body (char-array "Of something")}]
-         (core/start
-          (prepare {})
-          edd/handler
-          :filters [fl/from-api]
-          :post-filter fl/to-api)
-         (verify-traffic-edn [{:method  :get
-                               :timeout 90000000
-                               :url     "http://mock/2018-06-01/runtime/invocation/next"}
-                              {:body   {:body            (util/to-json
-                                                          {:result         {:success    true
-                                                                            :effects    [{:id           fx-id
-                                                                                          :cmd-id       :fx-command
-                                                                                          :service-name :local-test}]
-                                                                            :events     1
-                                                                            :meta       [{:dummy-cmd {:id cmd-id}}]
-                                                                            :identities 0}
-                                                           :invocation-id  0
-                                                           :request-id     request-id
-                                                           :interaction-id interaction-id})
-                                        :headers         {:Access-Control-Allow-Headers  "Id, VersionId, X-Authorization,Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
-                                                          :Access-Control-Allow-Methods  "OPTIONS,POST,PUT,GET"
-                                                          :Access-Control-Allow-Origin   "*"
-                                                          :Access-Control-Expose-Headers "*"
-                                                          :Content-Type                  "application/json"}
-                                        :isBase64Encoded false
-                                        :statusCode      200}
-                               :method :post
-                               :url    "http://mock/2018-06-01/runtime/invocation/0/response"}]))))))
+      (verify-distributed-response))))
 
 (def apply-ctx
   {:def-apply {:event-1 (fn [p v]
@@ -430,65 +333,6 @@
               :version 3}
              (common/get-by-id mock/ctx {:id id1}))))))
 
-(deftest test-get-by-id-missing-snapshot
-  (testing "Test combinations of get-by. If aggregate snapshot return nil we apply events"
-    "If no events we return nil"
-    (let [CTX {:aws {:region "test"
-                     :account-id "test"
-                     :aws-session-token "test"}
-               :environment-name-lower "test"}]
-      ;; Test with valid UUID - when snapshot returns 404 and no events exist, returns nil aggregate
-      (let [test-id (uuid/gen)]
-        (mock/with-mock-dal
-          (with-redefs [dal/get-events (fn [_]
-                                         [])
-                        util/http-get (fn [_url _request & {:keys [_raw]}]
-                                        {:status 404})]
-            (let [response (query/handle-query
-                            (-> (prepare CTX)
-                                (elastic-view-store/register))
-                            {:query
-                             {:query-id :get-by-id
-                              :id       test-id}})]
-              (is (contains? response :aggregate))
-              (is (= nil
-                     (:aggregate response)))))))
-      ;; Test with valid UUID - when snapshot returns 403, throws exception
-      (let [test-id (uuid/gen)]
-        (mock/with-mock-dal
-          (with-redefs [dal/get-events (fn [_]
-                                         [{:event-id  :e7
-                                           :event-seq 1}])
-                        util/http-get (fn [_url _request & {:keys [_raw]}]
-                                        {:status 403})]
-            (is (thrown? ExceptionInfo
-                         (query/handle-query
-                          (-> (prepare CTX)
-                              (elastic-view-store/register))
-                          {:query
-                           {:query-id :get-by-id
-                            :id       test-id}}))))))
-      ;; Test with valid UUID - when snapshot returns 404 but events exist, applies events
-      (let [test-id (uuid/gen)]
-        (mock/with-mock-dal
-          (with-redefs [dal/get-events (fn [_]
-                                         [{:event-id  :e7
-                                           :event-seq 1
-                                           :id        test-id}])
-                        util/http-get (fn [_url _request & {:keys [_raw]}]
-                                        {:status 404})]
-            (let [response (query/handle-query
-                            (-> (prepare CTX)
-                                (elastic-view-store/register))
-                            {:query
-                             {:query-id :get-by-id
-                              :id       test-id}})]
-              (is (contains? response :aggregate))
-              (is (= {:id      test-id
-                      :name    :e7
-                      :version 1}
-                     (:aggregate response))))))))))
-
 (deftest test-wrap-global-not-list
   (let [result (cmd/wrap-commands {:service-name :a}
                                   {:a :b})]
@@ -544,16 +388,3 @@
     (is (= [{:service  :a
              :commands [{:a :b}]}]
            result))))
-
-(deftest test-metadata-when-result-vector
-  (is (= {:result :a}
-         (edd/prepare-response {:resp [{:result :a}]}))))
-
-(deftest test-metadata-when-result-error
-  (is (= {:error "Some error"}
-         (edd/prepare-response {:resp [{:error "Some error"}]}))))
-
-(deftest test-metadata-when-result-map
-  (is (= [{:value :a}]
-         (edd/prepare-response {:resp          [{:value :a}]
-                                :queue-request true}))))

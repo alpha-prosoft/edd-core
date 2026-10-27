@@ -2,24 +2,17 @@
   (:require [clojure.test :refer [deftest is testing]]
             [edd.postgres.event-store :as event-store]
             [lambda.request :as request]
-            [lambda.test.fixture.client :refer [verify-traffic-edn]]
             [edd.memory.view-store :as view-store]
             [lambda.test.fixture.state :refer [*dal-state*]]
             [edd.core :as edd]
+            [edd.distribution.memory :as memory-distribution]
             [lambda.uuid :as uuid]
             [edd.test.fixture.dal :as mock]
             [edd.test.fixture.dates :as dates]
-            [lambda.test.fixture.core :as core-mock]
-            [lambda.util :as util]
             [edd.common :as common]
             [clojure.tools.logging :as log]
-            [lambda.core :as core]
-            [sdk.aws.common]
-            [sdk.aws.s3]
-            [edd.response.s3]
-            [aws.aws]
             [lambda.ctx :as lambda-ctx]
-            [aws.ctx :as aws-ctx]))
+            [lambda.runtime :as runtime]))
 
 (def fx-id (uuid/gen))
 
@@ -31,7 +24,7 @@
   []
   (-> {}
       (lambda-ctx/init)
-      (aws-ctx/init)
+      (memory-distribution/register)
       (event-store/register)
       (view-store/register)))
 
@@ -670,130 +663,88 @@
           (is (= agg-id-3
                  (common/get-aggregate-id-by-identity ctx {:ccn ccn3}))))))))
 
-(deftest test-retry-with-cache
-  "We need to ensure that we send retry events to sqs
-   when response is cached to s3 and we retry"
-  (let [aggregate-id (uuid/gen)
-        attempt (atom 0)
-        request-id (uuid/gen)
-        interaction-id (uuid/gen)
-        invocation-id-1 (uuid/gen)
-        invocation-id-2 (uuid/gen)
-        environment-name-lower (util/get-env "EnvironmentNameLower" "local")
-        account-id (util/get-env "AccountId" "local")
+(deftest test-retry-after-failed-attempt
+  (let [aggregate-id
+        (uuid/gen)
 
-        service-name
-        :retry-test
+        attempt
+        (atom 0)
 
-        ctx (-> mock/ctx
-                (assoc :environment-name-lower
-                       environment-name-lower)
-                (event-store/register)
-                (view-store/register)
-                (dissoc :response-cache)
-                (edd.response.s3/register)
-                (with-realm)
-                (assoc :aws {:aws-session-token "tok"})
-                (assoc :service-name service-name)
-                (edd/reg-cmd :error-prone (fn [_ctx cmd]
-                                            [{:identity (:id cmd)}
-                                             {:event-id :error-prone-event
-                                              :attr     "sa"}])))]
-    (with-redefs [sdk.aws.s3/put-object (fn [_ctx _object]
-                                          {:status 200})
-                  sdk.aws.common/authorize (fn [_] "")
-                  sdk.aws.common/create-date (fn [] "20220304T113706Z")
-                  event-store/store-identity (fn [_ctx _identity]
+        request-id
+        (uuid/gen)
+
+        interaction-id
+        (uuid/gen)
+
+        registered
+        (edd/reg-cmd (assoc (clean-ctx) :service-name :retry-test)
+                     :error-prone
+                     (fn [_ctx cmd]
+                       [{:identity (:id cmd)}
+                        {:event-id :error-prone-event
+                         :attr     "sa"}]))
+
+        ctx
+        (runtime/init (with-realm (memory-distribution/register registered (atom {})))
+                      edd/handler
+                      {})
+
+        request
+        {:request-id     request-id
+         :interaction-id interaction-id
+         :commands       [{:cmd-id :error-prone
+                           :id     aggregate-id}]}
+
+        handle
+        (fn [invocation-id]
+          (binding [request/*request* (atom {})]
+            (let [invocation-ctx
+                  (assoc ctx :invocation-id invocation-id)]
+              (runtime/distribute! invocation-ctx (runtime/handle invocation-ctx request)))))
+
+        published-request-ids
+        (fn []
+          (map #(map :request-id (get-in % [:Records 0 :resp :events]))
+               (mapcat val (memory-distribution/published ctx))))
+
+        invocation-id-1
+        (uuid/gen)
+
+        invocation-id-2
+        (uuid/gen)]
+    (with-redefs [event-store/store-identity (fn [_ctx _identity]
                                                (when (= @attempt 0)
                                                  (swap! attempt inc)
                                                  (throw (ex-info "Timeout"
                                                                  {:data "Timeout"}))))]
-      (core-mock/mock-core
-       :invocations [(util/to-json {:request-id     request-id
-                                    :interaction-id interaction-id
-                                    :invocation-id  invocation-id-1
-                                    :commands       [{:cmd-id :error-prone
-                                                      :id     aggregate-id}]})
-                     (util/to-json {:request-id     request-id
-                                    :interaction-id interaction-id
-                                    :invocation-id  invocation-id-2
-                                    :commands       [{:cmd-id :error-prone
-                                                      :id     aggregate-id}]})]
+      (testing "the failed attempt answers with the exception and distributes nothing"
+        (is
+         (= {:exception      "Timeout"
+             :invocation-id  invocation-id-1
+             :request-id     request-id
+             :interaction-id interaction-id}
+            (handle invocation-id-1)))
 
-       :requests [{:post (str
-                          "https://sqs.eu-central-1.amazonaws.com/"
-                          account-id
-                          "/test-evets-queue")
-                   :status 200}
-                  {:post (str
-                          "https://sqs.eu-central-1.amazonaws.com/"
-                          account-id
-                          "/"
-                          environment-name-lower
-                          "-glms-router-svc-response")
-                   :status 200}
-                  {:post (str
-                          "http://mock/2018-06-01/runtime/invocation/"
-                          invocation-id-1
-                          "/error")
-                   :status 200}
-                  {:post (str
-                          "http://mock/2018-06-01/runtime/invocation/"
-                          invocation-id-2
-                          "/response")
-                   :status 200}]
-       (core/start
-        ctx
-        edd/handler)
-       (verify-traffic-edn [{:method  :get
-                             :timeout 90000000
-                             :url     "http://mock/2018-06-01/runtime/invocation/next"}
-                            {:body   {:exception     "Timeout"
-                                      :invocation-id  invocation-id-1
-                                      :request-id     request-id
-                                      :interaction-id interaction-id}
-                             :method :post
-                             :url    (str "http://mock/2018-06-01/runtime/invocation/"
-                                          invocation-id-1
-                                          "/error")}
-                            {:method  :get
-                             :timeout 90000000
-                             :url     "http://mock/2018-06-01/runtime/invocation/next"}
-                            {:body            (str "Action=SendMessage&MessageBody=%7B%22Records%22%3A%5B%7B%22s3%22%3A%7B%22bucket%22%3A%7B%22name%22%3A%22"
-                                                   account-id
-                                                   "-"
-                                                   environment-name-lower
-                                                   "-sqs%22%7D%2C%22object%22%3A%7B%22key%22%3A%22response%2F"
-                                                   request-id
-                                                   "%2F0%2F"
-                                                   (name service-name)
-                                                   ".json%22%7D%7D%7D%5D%7D")
-                             :connect-timeout 300
-                             :headers         {"Accept"               "application/json"
-                                               "Authorization"        ""
-                                               "Content-Type"         "application/x-www-form-urlencoded"
-                                               "X-Amz-Date"           "20220304T113706Z"
-                                               "X-Amz-Security-Token" "tok"}
-                             :idle-timeout    5000
-                             :method          :post
-                             :url             (str "https://sqs.eu-central-1.amazonaws.com/"
-                                                   account-id
-                                                   "/"
-                                                   environment-name-lower
-                                                   "-glms-router-svc-response")
-                             :version         :http1.1}
-                            {:body   {:result         {:meta       [{:error-prone {:id aggregate-id}}],
-                                                       :events     1,
-                                                       :success    true,
-                                                       :effects    [],
-                                                       :identities 1},
-                                      :invocation-id  invocation-id-2
-                                      :request-id     request-id
-                                      :interaction-id interaction-id}
-                             :method :post
-                             :url    (str "http://mock/2018-06-01/runtime/invocation/"
-                                          invocation-id-2
-                                          "/response")}])))))
+        (is
+         (= []
+            (published-request-ids))))
+
+      (testing "the retry stores the command, reports the attempt and distributes its events to the router"
+        (is
+         (= {:result         {:meta       [{:error-prone {:id aggregate-id}}]
+                              :events     1
+                              :success    true
+                              :effects    []
+                              :identities 1}
+             :meta           {:handler {:attempt 1}}
+             :invocation-id  invocation-id-2
+             :request-id     request-id
+             :interaction-id interaction-id}
+            (handle invocation-id-2)))
+
+        (is
+         (= [[request-id]]
+            (published-request-ids)))))))
 
 (defn get-fx-meta
   [ctx req]

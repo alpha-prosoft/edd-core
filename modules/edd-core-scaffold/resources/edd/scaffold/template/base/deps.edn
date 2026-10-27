@@ -1,0 +1,6 @@
+{:paths ["src" "resources"]
+ :deps {}
+ :aliases {:test {:extra-paths ["test"]
+                  :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+                  :jvm-opts ["-Dclojure.tools.logging.factory=lambda.logging-local/slf4j-local-factory"]}
+           :unit {:main-opts ["-m" "kaocha.runner" "unit"]}}}

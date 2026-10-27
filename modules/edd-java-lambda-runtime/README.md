@@ -9,8 +9,7 @@ a `lambda.Handler` class implementing `RequestStreamHandler` and
 (edd.java-lambda-runtime.core/start
   (-> {} (event-store/register) (view-store/register) (my/register))
   edd/handler
-  :filters [from-api from-queue from-bucket]
-  :post-filter to-api)
+  :filters [aws.filters/from-bucket])
 ```
 
 ## SnapStart / CRaC lifecycle

@@ -242,8 +242,7 @@
   (log/debug "Loading config name:" name)
   (let [file (io/as-file name)
         temp-file (io/as-file (str "/tmp/" name))
-        classpath (when-let [r (io/resource name)]
-                    (io/as-file r))]
+        classpath (io/resource name)]
     (to-edn
      (cond
        (.exists ^File file) (do

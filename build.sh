@@ -64,9 +64,18 @@ for var in "${required_vars[@]}"; do
   log_info "  ${var}=${!var}"
 done
 
+# Unit tests run in the environment the build started with, without AWS
+# credentials: their mocks fall back to real environment variables when set,
+# so the AWS and test settings exported below must not reach them.
+mapfile -d '' UNIT_TEST_ENV < <(env -0 -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
+                                     -u AWS_SESSION_TOKEN -u AWS_SHARED_CREDENTIALS_FILE)
+with_unit_test_env() {
+  env -i "${UNIT_TEST_ENV[@]}" "$@"
+}
+
 # Step 1: Run unit tests
 log_info "Running unit tests..."
-if PROJECT_NAME="api" clojure -M:test:unit 2>&1 | tee /tmp/unit-test.log; then
+if with_unit_test_env env PROJECT_NAME="api" clojure -M:test:unit 2>&1 | tee /tmp/unit-test.log; then
   log_success "Unit tests passed"
 else
   log_error "Unit tests failed. Check /tmp/unit-test.log for details"
@@ -135,6 +144,7 @@ export DatabaseEndpoint="127.0.0.1"
 export DatabasePort="5433"
 export IndexDomainScheme=http
 export IndexDomainEndpoint=127.0.0.1:9200
+export KafkaBootstrapServers="${KafkaBootstrapServers:-127.0.0.1:9092}"
 
 # Step 4: Purge SQS queues
 log_info "Purging all SQS queues..."
@@ -153,7 +163,7 @@ log_info "Processed ${queue_count} SQS queues"
 # Step 5: Build and install main JAR
 # NOTE: Database migrations are handled by pre-build.sh
 log_info "Building main JAR (build ${BUILD_ID})..."
-VERSION="1.${BUILD_ID}"
+VERSION="${APP_VERSION:-0.0.${BUILD_ID}}"
 
 if clojure -T:build jar+install \
   :app-group-id "${ARTIFACT_ORG}" \
@@ -180,6 +190,10 @@ ls -la target
 log_success "Main artifacts copied"
 
 # Step 7: Build modules
+log_info "Stamping edd-core-scaffold with ${ARTIFACT_ORG}/${VERSION}"
+printf '{:group-id "%s" :version "%s"}\n' "${ARTIFACT_ORG}" "${VERSION}" \
+  > modules/edd-core-scaffold/resources/edd/scaffold/version.edn
+
 log_info "Building modules..."
 log_info "Current directory: $(pwd)"
 log_info "Listing all directories in modules/:"
@@ -195,26 +209,33 @@ log_info "Scanning for modules to build..."
 # Module build order: modules with no inter-module deps first,
 # then modules that depend on other modules.
 # Dependency graph:
-#   edd-core-view-store-postgres → edd-core-clj, edd-core-io
-#   edd-java-lambda-runtime      → edd-core-aws-emf
+#   edd-core-aws                 → edd-core (AWS clients, Lambda runtime, DynamoDB, S3, Cognito, EMF)
+#   edd-core-sqs, edd-core-client, edd-core-import,
+#   edd-java-lambda-runtime      → edd-core-aws
+#   edd-core-view-store-postgres → edd-core-clj, edd-core-io, edd-core-opensearch
 MODULE_BUILD_ORDER=(
   # Tier 1: no inter-module dependencies
-  edd-core-aws-emf
-  edd-core-client
   edd-core-clj
   edd-core-io
   edd-core-json
   edd-core-parquet
   edd-core-xlsx
   # Tier 2: depend on edd-core only (root, already built)
-  edd-core-dev
-  edd-core-import
+  edd-core-aws
+  edd-core-opensearch
   edd-core-nippy
   edd-core-security
   edd-router
+  edd-core-undertow
+  edd-core-kafka
   # Tier 3: depend on other modules
+  edd-core-client
+  edd-core-import
+  edd-core-sqs
   edd-core-view-store-postgres
   edd-java-lambda-runtime
+  # Tier 4: project generator, its it suite generates and tests sample projects
+  edd-core-scaffold
 )
 
 # Fail if any module with deps.edn exists but is not in MODULE_BUILD_ORDER
@@ -308,7 +329,7 @@ for module in "${MODULE_BUILD_ORDER[@]}"; do
   if grep -q ":unit" deps.edn; then
     log_info "Running unit tests for ${module}..."
     log_info "Command: clojure -M:test:unit --reporter documentation --no-capture-output"
-    if ! clojure -M:test:unit --reporter documentation --no-capture-output 2>&1 | tee "/tmp/module-${module}-unit.log"; then
+    if ! with_unit_test_env clojure -M:test:unit --reporter documentation --no-capture-output 2>&1 | tee "/tmp/module-${module}-unit.log"; then
       log_error "Unit tests failed for module: ${module}"
       log_error "Current directory: $(pwd)"
       log_error "Test log:"
@@ -378,6 +399,19 @@ if ! clojure -M:test:it --reporter documentation --no-capture-output 2>&1 | tee 
   exit 1
 fi
 log_success "Integration tests passed"
+
+# Step 8c: Local end-to-end test
+# The same e2e/it suite against ping/pong/router on Undertow + Kafka + Postgres,
+# started in docker compose by pre-build.sh (e2e/run-e2e-local.sh).
+log_info "========================================="
+log_info "Running local end-to-end test from: $(pwd)"
+log_info "========================================="
+if ! ./e2e/run-e2e-local.sh test 2>&1 | tee /tmp/e2e-local-test.log; then
+  log_error "Local E2E test failed. Log output:"
+  cat /tmp/e2e-local-test.log
+  exit 1
+fi
+log_success "Local E2E test passed"
 
 # Step 8b: End-to-end deploy + smoke test
 # Builds the ping/pong/router demo lambdas against the freshly-built edd-core,

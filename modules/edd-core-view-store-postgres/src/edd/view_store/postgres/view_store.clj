@@ -3,18 +3,16 @@
    
    PREREQUISITES:
    - PostgreSQL database connection pool in context (via edd.postgres.pool)
-   - AWS S3 credentials for backup storage
    - Database schema per realm-service (created via migrations)
    
    ARCHITECTURE:
-   - Primary storage: PostgreSQL (JSONB for fast queries)
-   - Backup storage: S3 (for disaster recovery and reduced DB load)
-   - Read path: S3 first (fast), then Postgres (may trigger event replay)
-   - Write path: Postgres + S3 in parallel
+   - Storage: PostgreSQL (JSONB for fast queries), history in a history table
+   - Optional snapshot cache (edd.snapshot-cache, e.g. S3) written on every
+     update and read before Postgres
    
    MULTIMETHOD IMPLEMENTATIONS:
-   - update-aggregate: Stores to Postgres, backs up to S3
-   - get-snapshot: Reads from S3 cache, falls back to Postgres
+   - update-aggregate: Stores to Postgres (and history when enabled)
+   - get-snapshot: Reads from Postgres, versions from the history table
    - get-by-id-and-version: Retrieves from event store history table
    - simple-search: Direct JSONB attribute matching
    - advanced-search: Advanced Search DSL queries parsed to SQL (supports OpenSearch and PostgreSQL)
@@ -26,7 +24,6 @@
    [clojure.tools.logging :as log]
    [edd.postgres.history :as es-history]
    [edd.postgres.pool :as pool :refer [*DB*]]
-   [edd.s3.view-store :as s3.vs]
    [edd.search :refer [with-init
                        simple-search
                        advanced-search
@@ -34,6 +31,7 @@
                        get-snapshot
                        get-by-id-and-version]]
    [edd.search.validation :as validation]
+   [edd.snapshot-cache :as snapshot-cache]
    [edd.view-store.postgres.api :as api]
    [edd.view-store.postgres.common
     :refer [->realm
@@ -65,8 +63,7 @@
     ;; Event store history is managed separately during store-results phase
     (when (= :enabled history-setting)
       (vs-history/insert-history-entry *DB* realm service aggregate))
-    ;; Backup to S3
-    (s3.vs/store-to-s3 ctx aggregate)
+    (snapshot-cache/store! ctx aggregate)
     ctx))
 
 (defmethod simple-search
@@ -156,25 +153,15 @@
         service (->service ctx)]
 
     (if version
-      ;; Specific version requested - S3 history primary, local view-store history fallback
       (util/d-time
        (format "PostgresViewStore fetching aggregate by id and version, service: %s, realm: %s, id: %s, version: %s"
                service realm id version)
-       (or
-        ;; Primary: S3 history (versioned snapshots)
-        (s3.vs/get-history-from-s3 ctx id version)
-        ;; Fallback: View store's local history (for standalone usage/compliance tests)
-        ;; Returns the aggregate directly (no wrapper map) due to AggregateBuilder
-        (vs-history/get-by-id-and-version *DB* realm service id version)))
-      ;; Latest version - read S3 first (cache), then Postgres (may trigger event replay)
+       (or (snapshot-cache/fetch-version ctx id version)
+           (vs-history/get-by-id-and-version *DB* realm service id version)))
       (util/d-time
        (format "PostgresViewStore fetching aggregate by id, service: %s, realm: %s, id: %s" service realm id)
-       (or (util/d-time
-            "PostgresViewStore Fetching from S3"
-            (s3.vs/get-from-s3 ctx id))
-           (util/d-time
-            "PostgresViewStore Fetching from database"
-            (api/get-by-id *DB* realm service id)))))))
+       (or (snapshot-cache/fetch ctx id)
+           (api/get-by-id *DB* realm service id))))))
 
 (defmethod get-by-id-and-version
   :postgres

@@ -2,11 +2,9 @@
   (:require [lambda.util :as util]
             [lambda.request :as req]
             [clojure.tools.logging :as log]
-            [aws.aws :as aws]
             [malli.core :as m]
             [edd.ctx :as edd-ctx]
-            [edd.schema :as schema]
-            [lambda.http-client :as http-client]))
+            [edd.schema :as schema]))
 
 (defn call-query-fn
   [ctx cmd query-fn]
@@ -17,62 +15,8 @@
 (defn- service-query? [{:keys [query-id ref]}]
   (and (some? query-id) (nil? ref)))
 
-(defn calc-service-query-url
-  [service {:keys [realm]
-            :as _meta}]
-  (let [api-url (util/get-env "ApiUrl")
-        default-url (str "https://api."
-                         (util/get-env "PrivateHostedZoneName"))
-        url (str
-             (or api-url
-                 default-url)
-             "/private/"
-             (case realm
-               :test "test"
-               "prod")
-             "/"
-             (name service)
-             "/query")]
-    url))
-
-(defn -make-service-query-request
-  [{:keys [meta url]
-    :as request}]
-  (http-client/retry-n
-   #(util/http-post
-     url
-     (http-client/request->with-timeouts
-      %
-      (dissoc request :url :meta)
-      :idle-timeout 10000))
-   :meta meta))
-
 (defn- service-rtf? [{:keys [query-id ref]}]
   (and (nil? query-id) (some? ref)))
-
-(defn calc-service-rtf-url
-  [service {:keys [ref]}]
-  (str "https://"
-       (name :glms-content-svc)
-       "."
-       (util/get-env "PrivateHostedZoneName")
-       "/load/"
-       (name service)
-       "/"
-       ref))
-
-(defn -make-service-rtf-request
-  [{:keys [meta url]
-    :as request}]
-  (http-client/retry-n
-   #(util/http-get
-     url
-     (http-client/request->with-timeouts
-      %
-      (dissoc request :url :meta)
-      :idle-timeout 50000)
-     :raw true)
-   :meta meta))
 
 (defn with-cache
   [f & params]
@@ -93,92 +37,46 @@
          [:edd-core :http-cache params])))
     (apply f params)))
 
-(defn -http-call
-  [{:keys [meta]
-    :as ctx} {:keys [service query]}]
-  ;; A dep query fn returning nil means "nothing to resolve" — bail out
-  ;; before fetching a token, which needs request-scoped state.
-  (when (or (service-query? query)
-            (service-rtf? query))
-    (let [token (aws/get-token ctx)
-          service-name (:service-name ctx)]
-      (cond
-        (service-query? query)
-        (with-cache -make-service-query-request {:url         (calc-service-query-url service meta)
-                                                 :meta        {:to-service   service
-                                                               :from-service service-name
-                                                               :query-id     (:query-id query)}
-                                                 :body        (util/to-json
-                                                               {:query          query
-                                                                :meta           (:meta ctx)
-                                                                :request-id     (:request-id ctx)
-                                                                :interaction-id (:interaction-id ctx)})
-
-                                                 :headers     {"Content-Type"    "application/json"
-                                                               "X-Authorization" token}})
-
-        (service-rtf? query)
-        (with-cache -make-service-rtf-request {:url         (calc-service-rtf-url service query)
-                                               :meta        {:to-service   service
-                                                             :from-service service-name
-                                                             :ref          (:ref query)}
-
-                                               :headers     {"Accept"          "*/*"
-                                                             "X-Authorization" token}})))))
+(defn- resolve-with-resolver
+  [ctx request]
+  (let [{:keys [resolver] :as config}
+        (edd-ctx/deps-resolver ctx)]
+    (when-not resolver
+      (throw (ex-info "No deps resolver registered" {:service (:service request)})))
+    ((:resolve resolver) ctx config request)))
 
 (defn resolve-remote-dependency
+  "Builds the dependency request {:service :query :meta :request-id
+   :interaction-id} and resolves it through the registered deps resolver,
+   which answers {:result value} or {:error error}. A query fn returning
+   neither :query-id nor :ref skips the dependency."
   [ctx cmd {:keys [service query]}]
   (util/d-time
-   (format "Resolving remote dependency: %s %s"
-           service
-           (or (:cmd-id cmd)
-               (:cmd-id cmd)))
-   (let [query-fn query
-         service-name (:service-name ctx)
-         resolved-query (call-query-fn ctx cmd query-fn)
-         request
-         {:service service
-          :query resolved-query}
-         response (-http-call ctx request)]
+   (format "Resolving remote dependency: %s %s" service (:cmd-id cmd))
+   (let [resolved-query
+         (call-query-fn ctx cmd query)]
+     (if (or (service-query? resolved-query)
+             (service-rtf? resolved-query))
+       (let [request
+             {:service service
+              :query resolved-query
+              :meta (:meta ctx)
+              :request-id (:request-id ctx)
+              :interaction-id (:interaction-id ctx)}
 
-     (when-not (or (service-query? resolved-query) (service-rtf? resolved-query))
-       (log/info "Skiping resolving remote dependency because query-id and ref are nil")
-       nil)
-     (when (:error response)
-       (throw (ex-info (str "Request error fetching dependency" service)
-                       {:error {:to-service   service
-                                :from-service service-name
-                                :query-id     (:query-id resolved-query)
-                                :ref          (:ref resolved-query)
-                                :message      (:error response)}})))
-     (when (:error (get response :body))
-       (throw (ex-info (str "Error response from service " service)
-                       {:error {:to-service   service
-                                :from-service service-name
-                                :query-id     (:query-id resolved-query)
-                                :ref          (:ref resolved-query)
-                                :message      {:response     (get response :body)
-                                               :error-source service}}})))
-     (when (:exception (get response :body))
-       (throw (ex-info (str "Exception response from service " service)
-                       {:error {:to-service   service
-                                :from-service service-name
-                                :query-id     (:query-id resolved-query)
-                                :ref          (:ref resolved-query)
-                                :message      {:response     (get response :body)
-                                               :error-source service}}})))
-     (if (> (:status response 0) 299)
-       (throw (ex-info (str "Deps request error for " service)
-                       {:error {:to-service   service
-                                :from-service service-name
-                                :service      service
-                                :query-id     (:query-id resolved-query)
-                                :ref          (:ref resolved-query)
-                                :status       (:status response)
-                                :message      (str "Response status:" (:status response))}}))
-       (cond
-         (service-query? resolved-query) (get-in response [:body :result])
-         (service-rtf? resolved-query) (get response :body))))))
+             {:keys [result error]}
+             (with-cache #(resolve-with-resolver ctx %) request)]
+         (when error
+           (throw (ex-info (str "Error resolving dependency from " service)
+                           {:error (merge {:to-service service
+                                           :from-service (:service-name ctx)
+                                           :query-id (:query-id resolved-query)
+                                           :ref (:ref resolved-query)}
+                                          error)})))
+         result)
+       (do
+         (log/info "Skipping remote dependency, query has no query-id or ref")
+         nil)))))
 
 (defn- validate-response-schema-setting [ctx]
   (let [setting (or (:response-schema-validation ctx)

@@ -56,5 +56,106 @@ services:
     networks:
       - opensearch-net
 
+  kafka:
+    image: ${DOCKER_URL:-}apache/kafka:4.4.0
+    container_name: kafka_edd
+    hostname: kafka
+    ports:
+      - 9092:9092
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: HOST://0.0.0.0:9092,DOCKER://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: HOST://127.0.0.1:9092,DOCKER://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: HOST:PLAINTEXT,DOCKER:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: DOCKER
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - opensearch-net
+
+  kafka-ui:
+    image: ${DOCKER_URL:-}kafbat/kafka-ui:v1.5.0
+    container_name: kafka_ui_edd
+    ports:
+      - 8090:8080
+    environment:
+      KAFKA_CLUSTERS_0_NAME: edd
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    depends_on:
+      - kafka
+    networks:
+      - opensearch-net
+
+  # E2E services on Undertow + Kafka + Postgres (docker compose --profile e2e),
+  # run from the jars e2e/run-e2e-local.sh builds into e2e/target/local.
+  ping-svc:
+    profiles: [e2e]
+    image: ${DOCKER_URL:-}eclipse-temurin:25.0.4.1_1-jre-alpine
+    command: java -cp /app/ping-svc.jar clojure.main -m ping-svc.main
+    environment: &e2e-env
+      ServiceName: ping-svc
+      ResourceName: ping-svc
+      EnvironmentNameLower: cqrs-e2e
+      PublicHostedZoneName: example.com
+      AccountId: "000000000000"
+      Region: eu-west-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      DatabaseEndpoint: postgres
+      DatabasePort: "5432"
+      DatabasePassword: no-secret
+      KafkaBootstrapServers: kafka:29092
+      ApiUrl: http://gateway
+    volumes:
+      - ./e2e/target/local:/app:ro
+    depends_on: [postgres, kafka]
+    networks:
+      - opensearch-net
+
+  pong-svc:
+    profiles: [e2e]
+    image: ${DOCKER_URL:-}eclipse-temurin:25.0.4.1_1-jre-alpine
+    command: java -cp /app/pong-svc.jar clojure.main -m pong.local
+    environment:
+      <<: *e2e-env
+      ServiceName: pong-svc
+      ResourceName: pong-svc
+    volumes:
+      - ./e2e/target/local:/app:ro
+    depends_on: [postgres, kafka]
+    networks:
+      - opensearch-net
+
+  router-svc:
+    profiles: [e2e]
+    image: ${DOCKER_URL:-}eclipse-temurin:25.0.4.1_1-jre-alpine
+    command: java -cp /app/router-svc.jar clojure.main -m router.local
+    environment:
+      <<: *e2e-env
+      ServiceName: router-svc
+      ResourceName: router-svc
+    volumes:
+      - ./e2e/target/local:/app:ro
+    depends_on: [kafka]
+    networks:
+      - opensearch-net
+
+  gateway:
+    profiles: [e2e]
+    image: ${DOCKER_URL:-}nginx:1.30.6-alpine-slim
+    ports:
+      - 8085:80
+    volumes:
+      - ./e2e/local/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on: [ping-svc, pong-svc]
+    networks:
+      - opensearch-net
+
 networks:
   opensearch-net:

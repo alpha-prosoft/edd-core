@@ -5,9 +5,8 @@
    [lambda.util :as util]
    [edd.dal :as dal]
    [lambda.request :as request]
-   [edd.response.cache :as response-cache]
    [malli.error :as me]
-   [edd.response.s3 :as s3-cache]
+   [edd.distribution.response :as response]
    [edd.ctx :as edd-ctx]
    [edd.el.ctx :as el-ctx]
    [edd.common :as common]
@@ -16,10 +15,7 @@
    [edd.schema.core :as edd-schema]
    [edd.el.query :as query])
   (:import
-   (clojure.lang ExceptionInfo)
-   (java.util.concurrent Executors
-                         ExecutorService
-                         Future)))
+   (clojure.lang ExceptionInfo)))
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
@@ -428,110 +424,41 @@
           (retry f (dec n)))
         (throw e)))))
 
-(defn- log-request [ctx body]
-  (dal/log-request ctx body)
-  ctx)
+(defn- log-request
+  "Logs the request, returns how many times it was logged before when the
+   event store counts."
+  [ctx body]
+  (let [logged
+        (dal/log-request ctx body)]
+    (when (integer? logged)
+      logged)))
 
-(defn resp->store-cache-partition
-  [ctx resp]
-  (response-cache/cache-response ctx resp))
-
-(defn do-execute
-  [jobs]
-  (System/gc)
-  (let [resonable-theread-count "5"
-        param-threads (util/get-env "CacheThreadCount"
-                                    resonable-theread-count)
-        param-threads (Integer/parseInt param-threads)
-        nthreads param-threads
-        _ (log/info (str "Using threads: " nthreads
-                         " to run jobs"))
-        ^ExecutorService pool (Executors/newFixedThreadPool nthreads)
-        resp (mapv
-              (fn [^Future future]
-                (.get future))
-              (.invokeAll pool jobs))]
-    (.shutdown pool)
-    resp))
-
-(defn resp->cache-partitioned
-  [ctx resp]
-  (util/d-time
-   "Cache partitioned"
-   (let [effects (:effects resp)
-         resp (dissoc resp :effects)
-         partition-size (el-ctx/get-effect-partition-size ctx)
-         sample (take partition-size
-                      effects)]
-     (if (< (count sample)
-            partition-size)
-       (assoc resp
-              :cache-result
-              (resp->store-cache-partition ctx
-                                           (assoc resp
-                                                  :effects effects))
-              :effects effects)
-       (let [_ (System/gc)
-
-             parts
-             (util/d-time
-              (format "Parition effect:s %s" partition-size)
-              (partition partition-size partition-size nil effects))
-
-             _ (System/gc)
-
-             parts
-             (map-indexed
-              (fn [idx e]
-                (assoc resp
-                       :effects e
-                       :idx idx))
-              parts)
-
-             ;jobs
-             cache-result
-             (util/d-time
-              "Start storing cached partitions"
-              (map
-               (fn [part]
-                                        ;#
-                 (resp->store-cache-partition ctx part))
-               parts))
-
-             parts
-             (map :effects parts)
-
-             effects
-             (util/d-time
-              "Preparing response"
-              (flatten parts))]
-
-         (System/gc)
-         (assoc resp
-                :cache-result cache-result
-                :effects effects))))))
+(defn- with-handler-info
+  "Tells a repeated request apart: metadata {:handler {:attempt n :cached
+   true}} on the response, :attempt for a request seen before and :cached
+   when its stored response is returned. Nothing for a first execution."
+  [resp attempt cached?]
+  (let [info
+        (cond-> {}
+          (and attempt (pos? (long attempt))) (assoc :attempt attempt)
+          cached? (assoc :cached true))]
+    (if (seq info)
+      (with-meta resp {:handler info})
+      resp)))
 
 (defn store-results
+  "Persists the response and queues its router payloads, distributed once
+   the request is answered."
   [ctx resp]
-  (let [{:keys [cache-result] :as resp}
-        (resp->cache-partitioned ctx resp)
+  (let [{:keys [payloads cache-result]}
+        (response/prepare ctx resp)
 
-        resp
-        (dissoc resp
-                :cache-result)]
-    (when (:error cache-result)
-      (throw (ex-info "Error caching result" (:error cache-result))))
+        stored
+        (cond-> resp
+          cache-result (assoc-in [:summary :cache-result] cache-result))]
     (doall
-     (dal/store-results (assoc ctx
-                               :resp
-                               (assoc-in resp
-                                         [:summary :cache-result]
-                                         cache-result))))
-    (swap! request/*request*
-           update
-           :cache-keys
-           (fn [v]
-             (conj v cache-result)))
+     (dal/store-results (assoc ctx :resp stored)))
+    (response/queue! payloads)
     (:summary resp)))
 
 (defn process-commands
@@ -539,19 +466,15 @@
   (let [ctx (-> ctx
                 (assoc :commands commands
                        :breadcrumbs (or (get body :breadcrumbs)
-                                        [0]))
-                (s3-cache/register))]
+                                        [0])))
 
-    (log-request ctx body)
+        attempt
+        (log-request ctx body)]
 
     (if-let [resp (:data (dal/get-command-response ctx))]
       (do
-        (swap! request/*request*
-               update
-               :cache-keys
-               (fn [v]
-                 (conj v (:cache-result resp))))
-        (dissoc resp :cache-result))
+        (response/queue-stored-response! ctx resp)
+        (with-handler-info (dissoc resp :cache-result) attempt true))
       (do
         (validate-commands ctx commands)
         (let [resp
@@ -589,22 +512,24 @@
                "store-final-result"
                (store-results ctx resp))]
 
-          result)))))
+          (with-handler-info result attempt false))))))
 
 (defn handle-commands
   [ctx body]
   (let [ref-date
         (util/date-time)
 
+        authenticated
+        (when (:from-api ctx)
+          (select-keys (:meta ctx) [:user :realm]))
+
         ctx
         (assoc ctx
                :meta (merge
                       (:meta ctx {})
-                      (:meta body {}))
-               :ref-date ref-date)
-
-        ctx
-        (s3-cache/register ctx)]
+                      (:meta body {})
+                      authenticated)
+               :ref-date ref-date)]
 
     (try
       (retry #(process-commands ctx body)

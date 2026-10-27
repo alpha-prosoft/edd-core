@@ -186,7 +186,8 @@
    and passes it to the formatter from [:logging :metrics-formatter] in ctx.
    Falls back to default-metrics-formatter (plain log/info) when absent."
   [ctx]
-  (when-not (util/get-env "AWS_LAMBDA_DISABLE_METRICS")
+  (when-not (or (util/get-env "DisableMetrics")
+                (util/get-env "AWS_LAMBDA_DISABLE_METRICS"))
     (init-metric-sources!)
     (let [formatter
           (get-in ctx [:logging :metrics-formatter] default-metrics-formatter)

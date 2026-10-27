@@ -13,10 +13,10 @@
    [lambda.request :as request]
    [edd.core :as edd]
    [edd.ctx :as edd-ctx]
+   [lambda.runtime :as runtime]
    [edd.el.cmd :as el-cmd]
    [edd.memory.view-store :as memory-view-store]
    [edd.memory.event-store :as memory-event-store]
-   [edd.response.cache :as response-cache]
    [lambda.test.fixture.state :refer [*dal-state* *queues*]])
   (:import
    [com.amazonaws.services.lambda.runtime Context]
@@ -72,7 +72,6 @@
       (assoc :meta {:realm :warmup})
       (memory-view-store/register)
       (memory-event-store/register)
-      (response-cache/register-default)
       (edd/reg-cmd :warmup-cmd
                    (fn [_ctx cmd]
                      {:event-id :warmup-done
@@ -89,8 +88,7 @@
     (let [preloaded
           (-> base-ctx
               (lambda-ctx/init)
-              (aws-ctx/init)
-              (lambda/init-filters))
+              (aws-ctx/init))
 
           ctx
           (warm-up-ctx preloaded)]
@@ -116,53 +114,34 @@
   (with-open [o (io/writer output)]
     (.write o payload)))
 
-(defn- on-success [_ctx response output]
-  (log/info "OnSuccessFn writing success")
-  (write-response! output (util/to-json response)))
-
-(defn- on-error [ctx response output]
-  (let [from-api?
-        (boolean (or (:from-api ctx) (:statusCode response)))
-
-        json
-        (util/to-json response)]
-    (log/infof "OnErrorFn writing error (from-api? %s)" from-api?)
-    (write-response! output json)
-    (when-not from-api?
-      (throw (RuntimeException. json)))))
-
 (defn java-request-handler
-  [init-ctx handler & {:keys [filters post-filter]
-                       :or   {filters     []
-                              post-filter (fn [ctx] ctx)}}]
+  "Options: :filters, runtime filters (see lambda.runtime)."
+  [init-ctx handler & {:as opts}]
   ;; Features (edd/reg-feature) are compiled once here, mirroring
   ;; lambda.core/start for the custom runtime.
-  (let [init-ctx (edd-ctx/init-features init-ctx)]
+  (let [init-ctx
+        (edd-ctx/init-features (lambda-ctx/init (runtime/init init-ctx handler opts)))]
     (fn [_this input output ^Context lambda-context]
       (binding [util/*cache* init-cache
                 request/*request* (atom {})
                 log-state/*invocation-start-ns* (System/nanoTime)]
-        (let [request
-              {:body (util/to-edn (slurp input))}
+        (let [ctx
+              (assoc (lambda-ctx/init (assoc init-ctx
+                                             :aws (cached-aws init-ctx)
+                                             :aws-ctx-initialized true))
+                     :invocation-id (uuid/parse (.getAwsRequestId lambda-context)))
 
-              ctx
-              (-> init-ctx
-                  (assoc :filters filters
-                         :handler handler
-                         :post-filter post-filter
-                         :aws (cached-aws init-ctx)
-                         :aws-ctx-initialized true)
-                  (lambda-ctx/init)
-                  (lambda/init-filters)
-                  (assoc :from-api (lambda/is-from-api request)
-                         :invocation-id (uuid/parse (.getAwsRequestId lambda-context))))]
+              _
+              (ensure-metrics! ctx)
 
-          (ensure-metrics! ctx)
+              {:keys [response error?]}
+              (lambda/handle-event ctx (util/to-edn (slurp input)))
 
-          (lambda/send-response
-           (lambda/handle-request ctx request)
-           {:on-success-fn (fn [c r] (on-success c r output))
-            :on-error-fn   (fn [c r] (on-error c r output))}))))))
+              json
+              (util/to-json response)]
+          (write-response! output json)
+          (when error?
+            (throw (RuntimeException. json))))))))
 
 (defmacro start
   [ctx handler & other]

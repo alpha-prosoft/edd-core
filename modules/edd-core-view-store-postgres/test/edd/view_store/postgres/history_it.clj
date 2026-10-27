@@ -3,26 +3,22 @@
             [edd.postgres.event-store :as event-store]
             [edd.view-store.postgres.view-store :as view-store]
             [edd.core :as edd]
-            [edd.s3.view-store :as s3.vs]
+            [edd.distribution.memory :as memory-distribution]
             [edd.test.fixture.dates :as dates]
             [lambda.uuid :as uuid]
             [lambda.util :as util]
             [edd.common :as common]))
 
 (use-fixtures :each
-  (dates/per-request-fixture)
-  (fn [t]
-    (with-redefs [s3.vs/store-to-s3 (fn [_ctx _aggregate] nil)
-                  s3.vs/get-from-s3 (fn [_ctx _id] nil)]
-      (t))))
+  (dates/per-request-fixture))
 
 (defn clean-ctx
   []
   (-> {}
       (assoc :service-name :local-test)
-      (assoc :response-cache :default)
       (assoc :hosted-zone-name (util/get-env "PublicHostedZoneName" "example.com"))
       (assoc :environment-name-lower (util/get-env "EnvironmentNameLower"))
+      (memory-distribution/register)
       (event-store/register)
       (view-store/register)))
 

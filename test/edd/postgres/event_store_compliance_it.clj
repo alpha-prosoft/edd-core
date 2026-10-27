@@ -112,6 +112,9 @@
 (deftest e2-log-request-error
   (compliance/e2-log-request-error))
 
+(deftest e3-log-request-counts-attempts
+  (compliance/e3-log-request-counts-attempts))
+
 ;; Category F: Response Log & Deduplication
 (deftest f1-store-results-logs-response-summary
   (compliance/f1-store-results-logs-response-summary))
@@ -166,3 +169,7 @@
 
 (deftest i5-realm-isolation
   (compliance/i5-realm-isolation))
+
+;; Category J: Retried Requests
+(deftest j1-retried-request-redistributes-effects
+  (compliance/j1-retried-request-redistributes-effects))

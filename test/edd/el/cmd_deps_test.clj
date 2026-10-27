@@ -2,15 +2,12 @@
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [lambda.util :as util]
             [edd.el.cmd :as cmd]
-            [edd.el.query :as el-query]
             [edd.common :as common]
             [edd.core :as edd]
-            [lambda.test.fixture.client :as client]
             [edd.memory.event-store :as event-store]
             [edd.test.fixture.dal :as mock]
             [lambda.request :as request]
             [edd.ctx :as edd-ctx]
-            [aws.aws :as aws]
             [lambda.test.fixture.state :as state])
   (:import (java.net URLEncoder)))
 
@@ -46,7 +43,7 @@
           (let [cmd {:cmd-id :test-cmd
                      :id     cmd-id
                      :value  "Some Value"}
-                ctx (-> {}
+                ctx (-> mock/ctx
                         (edd-ctx/put-cmd :cmd-id :test-cmd
                                          :options {:deps
                                                    {:test-value
@@ -66,80 +63,32 @@
                      cmd)]
             (is (= {:test-value
                     {:remote :response}}
-                   (select-keys ctx [:test-value])))
-
-            (client/verify-traffic [{:body            (util/to-json
-                                                       {:query          {:param "Some Value"
-                                                                         :query-id :some-query-id}
-                                                        :meta           meta
-                                                        :request-id     request-id
-                                                        :interaction-id interaction-id})
-                                     :headers         {"X-Authorization" "#mock-id-token"
-                                                       "Content-Type"    "application/json"}
-                                     :method          :post
-                                     :idle-timeout    10000
-                                     :connect-timeout 300
-                                     :url             (el-query/calc-service-query-url "remote-svc" meta)}])))))))
-
-(deftest test-remote-dependency
-  (let [meta {:realm :realm4}
-        ctx {:request-id     request-id
-             :interaction-id interaction-id
-             :meta           meta}]
-    (binding [request/*request* (atom {:scoped true})]
-      (with-redefs [aws/get-token (fn [_ctx] "#id-token")
-                    util/get-env (fn [v]
-                                   (get {"PrivateHostedZoneName" "mock.com"} v))]
-        (client/mock-http
-         [{:post (el-query/calc-service-query-url "some-remote-service" meta)
-           :body (util/to-json {:result {:a :b}})}]
-         (is (= {:a :b}
-                (cmd/resolve-remote-dependency
-                 ctx
-                 {}
-                 {:query   (fn [_ctx _cmd] {:a :b
-                                            :query-id :some-query-id})
-                  :service :some-remote-service})))
-         (is (= {:a :b}
-                (cmd/resolve-remote-dependency
-                 ctx
-                 {}
-                 {:query   (fn [_ctx _cmd] {:a :b
-                                            :query-id :some-query-id})
-                  :service :some-remote-service})))
-         (client/verify-traffic [{:body            (util/to-json
-                                                    {:query          {:a :b
-                                                                      :query-id :some-query-id}
-                                                     :meta           meta
-                                                     :request-id     request-id
-                                                     :interaction-id interaction-id})
-                                  :headers         {"X-Authorization" "#id-token"
-                                                    "Content-Type"    "application/json"}
-                                  :method          :post
-                                  :idle-timeout    10000
-                                  :connect-timeout 300
-                                  :url             (el-query/calc-service-query-url "some-remote-service" meta)}]))))))
+                   (select-keys ctx [:test-value])))))))))
 
 (deftest test-remote-dep-when-query-id-is-not-set
   (testing "If deps fn does not return a map with query-id we are skipping dependency resolution
 and return nil to enable query-fn to have when conditions based on previously resolved deps"
-    (let [meta {:realm :realm4}
-          ctx {:request-id     request-id
-               :interaction-id interaction-id
-               :meta           meta}]
-      (with-redefs [aws/get-token (fn [_ctx] "#id-token")
-                    util/get-env (fn [v]
-                                   (get {"PrivateHostedZoneName" "mock.com"} v))]
-        (client/mock-http
-         [{:post (el-query/calc-service-query-url "some-remote-service" meta)
-           :body (util/to-json {:result {:a :b}})}]
-         (is (= nil
-                (cmd/resolve-remote-dependency
-                 ctx
-                 {}
-                 {:query   (fn [_ctx _cmd] nil)
-                  :service :some-remote-service})))
-         (client/verify-traffic []))))))
+    (let [requests
+          (atom [])
+
+          ctx
+          (edd/reg-deps-resolver {:request-id     request-id
+                                  :interaction-id interaction-id
+                                  :meta           {:realm :realm4}}
+                                 {:resolver {:resolve (fn [_ctx _config request]
+                                                        (swap! requests conj request)
+                                                        {:result {:a :b}})}})]
+      (is
+       (= nil
+          (cmd/resolve-remote-dependency
+           ctx
+           {}
+           {:query   (fn [_ctx _cmd] nil)
+            :service :some-remote-service})))
+
+      (is
+       (= []
+          @requests)))))
 
 (deftest test-local-dep-when-query-id-is-not-set
   (testing "If deps fn does not return a map with query-id we are skipping dependency resolution
@@ -245,10 +194,9 @@ and return nil to enable query-fn to have when conditions based on previously re
                              :query-1 (fn [_ _]
                                         (throw (RuntimeException. "Bla"))))]
       (mock/with-mock-dal
-        (with-redefs  [el-query/-http-call
-                       (fn [_ctx {:keys [_service _query]}]
-                         {:status 200
-                          :body  {:exception "Sorry"}})]
+        (let [ctx (edd/reg-deps-resolver ctx {:resolver {:resolve (fn [_ctx _config _request]
+                                                                    {:error {:message {:response {:exception "Sorry"}
+                                                                                       :error-source :some-service}}})}})]
           (is (= {:exception
                   {:to-service :some-service
                    :from-service :local-test
@@ -476,9 +424,10 @@ and return nil to enable query-fn to have when conditions based on previously re
                                   :query-id :some-query-id}
                  :resp           {:remote :response}}]}
         (let [meta {:realm :realm5}
-              ctx (-> {:meta           meta
-                       :request-id     request-id
-                       :interaction-id interaction-id}
+              ctx (-> (assoc mock/ctx
+                             :meta           meta
+                             :request-id     request-id
+                             :interaction-id interaction-id)
                       (edd/reg-cmd :test-cmd (fn [_ctx cmd]
                                                {:event-id :event-1
                                                 :value    (:value cmd)})
@@ -495,20 +444,7 @@ and return nil to enable query-fn to have when conditions based on previously re
                     :value  "Some Value"})]
           (is (= {:test-value
                   {:remote :response}}
-                 (select-keys ctx [:test-value])))
-
-          (client/verify-traffic [{:body            (util/to-json
-                                                     {:query          {:param "Some Value"
-                                                                       :query-id :some-query-id}
-                                                      :meta           meta
-                                                      :request-id     request-id
-                                                      :interaction-id interaction-id})
-                                   :headers         {"X-Authorization" "#mock-id-token"
-                                                     "Content-Type"    "application/json"}
-                                   :method          :post
-                                   :idle-timeout    10000
-                                   :connect-timeout 300
-                                   :url             (el-query/calc-service-query-url "remote-svc"  meta)}]))))))
+                 (select-keys ctx [:test-value]))))))))
 
 (deftest dependant-deps
   (let [current-aggregate {:id      cmd-id-1
@@ -681,3 +617,44 @@ and return nil to enable query-fn to have when conditions based on previously re
     (mock/with-mock-dal
       (is (= {:status :success}
              (mock/query ctx {:query-id :query-3}))))))
+
+(def forged-meta
+  {:realm :realm2
+   :user  {:id   "attacker"
+           :role :admin}})
+
+(defn- meta-seen-by-handler
+  [ctx]
+  (let [seen
+        (atom nil)
+
+        ctx
+        (edd/reg-cmd ctx :cmd-1 (fn [ctx _cmd]
+                                  (reset! seen (select-keys (:meta ctx) [:user :realm]))
+                                  {:event-id :event-1}))]
+    (mock/with-mock-dal
+      {:realm :realm2}
+      (cmd/handle-commands ctx {:meta     forged-meta
+                                :commands [{:cmd-id :cmd-1
+                                            :id     cmd-id-1}]}))
+    @seen))
+
+(deftest test-api-request-keeps-authenticated-user-and-realm
+  (let [authenticated
+        {:realm :test
+         :user  {:id   "user-1"
+                 :role :viewer}}
+
+        ctx
+        (assoc mock/ctx
+               :from-api true
+               :meta authenticated)]
+
+    (is
+     (= authenticated
+        (meta-seen-by-handler ctx)))))
+
+(deftest test-non-api-request-takes-meta-from-body
+  (is
+   (= forged-meta
+      (meta-seen-by-handler mock/ctx))))

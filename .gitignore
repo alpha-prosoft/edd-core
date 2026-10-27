@@ -25,3 +25,4 @@ classes/
 null/
 pom.properties
 .opencode
+modules/edd-core-scaffold/resources/edd/scaffold/version.edn

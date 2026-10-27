@@ -2,6 +2,26 @@
 
 ## Changes
 
+**[AP-1021]** Add scaffold and move AWS out of core
+- edd-core-scaffold: one-line CLI that generates a working service
+  (lambda/undertow, sqs/kafka, stores, optional ansible deploy),
+  security wired in; e2e ping-svc is rendered from it
+- distribution: transports are features (memory in core,
+  edd-core-sqs, edd-core-kafka), router fan-out moved to core
+- response cache dropped: responses travel inline, duplicates are
+  rebuilt from the event and command stores
+- edd-core-aws (Lambda runtime, DynamoDB, S3, Cognito, EMF) and
+  edd-core-opensearch split out of core, new edd-core-undertow
+- runtimes decode their input (lambda.http, queue records); filters
+  are (fn [ctx request chain]), :post-filter removed
+- remote deps go through a registered deps resolver; edd-core-client
+  is the HTTP one with pluggable credentials (env, Cognito)
+- ping/pong e2e also runs on Undertow + Kafka + Postgres in docker
+  compose (e2e profile), same e2e/it suite as on AWS
+- see MIGRATIONS.md
+- API commands keep the authenticated :user and :realm; a client can
+  no longer override them through the request :meta
+
 **[AP-982]** Add e2e tests for edd features
 
 **[AP-976]** Add features extension point

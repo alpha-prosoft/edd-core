@@ -1,7 +1,11 @@
 (ns e2e.api-test
-  "Integration tests against the deployed E2E stack (real API Gateway + Lambdas +
-   DynamoDB + S3 + SQS). The deploy is done by e2e/run-e2e.sh, which exports:
+  "Integration tests against a deployed E2E stack: AWS (API Gateway + Lambdas +
+   DynamoDB + S3 + SQS, e2e/run-e2e.sh) or docker compose (Undertow + Kafka +
+   Postgres, e2e/run-e2e-local.sh, which skips the ^:aws tests). The runners export:
      ApiUrl               - base URL of the deployed REST API
+     E2E_CACHED_REQUEST_ID, E2E_INLINE_REQUEST_ID (AWS only) - request ids of
+                            the fan-out tests, whose S3 response cache objects
+                            run-e2e.sh checks after the suite
      E2E_IMPORT_OBJECT_ID - aggregate id of the file uploaded to the import bucket
 
    HTTP + JSON go through edd-core's own helpers so the wire format (\":kw\" /
@@ -164,7 +168,7 @@
       (is
        (= "Forbidden" (get-in denied [:body :exception :message]))))))
 
-(deftest s3-bucket-filter
+(deftest ^:aws s3-bucket-filter
   (testing "a file uploaded to the import bucket becomes an :object-uploaded command"
     (let [obj-id
           (uuid/parse (util/get-env "E2E_IMPORT_OBJECT_ID"))
@@ -301,7 +305,10 @@
                                 #(aggregate "ping-svc" id))))))
 
     (testing "replaying the same request-id is deduplicated (no second event)"
-      (cmd! "ping-svc" :set-value id {:value "twice"} :request-id req)
+      (is
+       (true? (get-in (cmd! "ping-svc" :set-value id {:value "twice"} :request-id req)
+                      [:body :meta :handler :cached])))
+
       (Thread/sleep 3000)
       (let [agg
             (aggregate "ping-svc" id)]
@@ -379,3 +386,68 @@
       (is
        (= "fanned" (:value (wait-for #(= "fanned" (:value %))
                                      #(aggregate "pong-svc" pong-target))))))))
+
+(defn- runner-request-id
+  "Request id the runner checks in the response cache bucket afterwards
+   (e2e/run-e2e.sh), a fresh one when run without it."
+  [env-var]
+  (if-let [request-id (util/get-env env-var)]
+    (uuid/parse request-id)
+    (uuid/gen)))
+
+(defn- fan-out!
+  "Fans a value out from svc to 7 aggregates of target-svc, returns their ids."
+  [svc request-id value]
+  (let [targets
+        (vec (repeatedly 7 uuid/gen))]
+    (is
+     (success? (cmd! svc :fan-out (uuid/gen) {:targets targets :value value} :request-id request-id)))
+    targets))
+
+(defn- received-values
+  [svc targets]
+  (mapv (fn [target]
+          (:value (wait-for #(some? (:value %))
+                            #(aggregate svc target))))
+        targets))
+
+(deftest fan-out-without-response-cache
+  (testing "ping-svc has no response cache: the 7 effects of one command travel inline to the router and reach pong-svc"
+    (let [targets
+          (fan-out! "ping-svc" (runner-request-id "E2E_INLINE_REQUEST_ID") "inline")]
+
+      (is
+       (= (repeat 7 "inline")
+          (received-values "pong-svc" targets))))))
+
+(deftest fan-out-with-response-cache
+  (testing "on AWS pong-svc has the S3 response cache with 3 effects per part: the response is stored in 3 parts, the router resolves the references and all 7 effects reach ping-svc"
+    (let [request-id
+          (runner-request-id "E2E_CACHED_REQUEST_ID")
+
+          targets
+          (fan-out! "pong-svc" request-id "cached")]
+
+      (is
+       (= (repeat 7 "cached")
+          (received-values "ping-svc" targets)))
+
+      (testing "replaying the request sends the stored response again and changes nothing"
+        (let [replayed
+              (cmd! "pong-svc" :fan-out (uuid/gen) {:targets targets :value "replayed"} :request-id request-id)]
+          (is
+           (success? replayed))
+
+          (is
+           (true? (get-in replayed [:body :meta :handler :cached]))))
+
+        (Thread/sleep 3000)
+
+        (is
+         (= (repeat 7 "cached")
+            (mapv #(:value (aggregate "ping-svc" %)) targets)))
+
+        (is
+         (= (repeat 7 1)
+            (mapv #(:version (aggregate "ping-svc" %)) targets)))))))
+

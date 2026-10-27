@@ -6,12 +6,9 @@
             [lambda.uuid :as uuid]
             [edd.dal :as dal]
             [edd.memory.event-store :as event-store]
-            [edd.response.s3 :as s3-cache]
             [edd.ctx :as edd-ctx]
-            [edd.core :as edd]
-            [aws.aws :as aws])
-  (:import (clojure.lang ExceptionInfo)
-           [java.net.http HttpTimeoutException]))
+            [edd.core :as edd])
+  (:import (clojure.lang ExceptionInfo)))
 
 (def cmd-id (uuid/gen))
 
@@ -69,49 +66,36 @@
 
 (deftest test-prepare-context-for-command-remote-deps
   "Test if context if properly prepared for remote queries"
-  (with-redefs [aws/get-token (fn [ctx] "")
-                dal/get-max-event-seq (fn [ctx id] 0)]
-    (let [ctx (edd-ctx/put-cmd {}
-                               :cmd-id :test-cmd
-                               :options {:deps
-                                         {:test-value
-                                          {:service :remote
-                                           :query   (fn [_ cmd]
-                                                      {:query-id :q1
-                                                       :query    {}})}}})
-          cmd {:cmd-id :test-cmd
-               :id     cmd-id}]
-      (with-redefs [util/http-post (fn [ctx q]
-                                     {:status 200
-                                      :body   {:result {:response true}}})]
-        (let [resolved-ctx (cmd/fetch-dependencies-for-command ctx cmd)]
-          (is (= {:edd-core
-                  {:commands
-                   {:test-cmd
-                    {:deps
-                     {:test-value
-                      {:service :remote
-                       :query any-fn}}}}}
-                  :test-value {:response true}}
-                 (dissoc resolved-ctx
-                         :dps
-                         :commands)))))
+  (with-redefs [dal/get-max-event-seq (fn [ctx id] 0)]
+    (let [response
+          (atom {:result {:response true}})
+
+          ctx
+          (edd/reg-deps-resolver
+           (edd-ctx/put-cmd {}
+                            :cmd-id :test-cmd
+                            :options {:deps
+                                      {:test-value
+                                       {:service :remote
+                                        :query   (fn [_ cmd]
+                                                   {:query-id :q1
+                                                    :query    {}})}}})
+           {:resolver {:resolve (fn [_ctx _config _request]
+                                  @response)}})
+
+          cmd
+          {:cmd-id :test-cmd
+           :id     cmd-id}]
+      (is
+       (= {:response true}
+          (:test-value (cmd/fetch-dependencies-for-command ctx cmd))))
+
       (testing "If error is returned"
-        (with-redefs [util/http-post (fn [ctx q]
-                                       {:error "ConnectionTimeout"})]
-          (is (thrown? ExceptionInfo
-                       (cmd/fetch-dependencies-for-command ctx cmd)))))
-      (testing "If resolved returns exception"
-        (with-redefs [util/http-post (fn [ctx q]
-                                       {:status 499
-                                        :body   {:response true}})]
-          (is (thrown? ExceptionInfo
-                       (cmd/fetch-dependencies-for-command ctx cmd)))))
-      (testing "If resolved returns exception"
-        (with-redefs [util/http-post (fn [ctx q]
-                                       (throw (HttpTimeoutException. "")))]
-          (is (thrown? ExceptionInfo
-                       (cmd/fetch-dependencies-for-command ctx cmd))))))))
+        (reset! response {:error {:message "ConnectionTimeout"}})
+
+        (is
+         (thrown? ExceptionInfo
+                  (cmd/fetch-dependencies-for-command ctx cmd)))))))
 
 (def id-1 (uuid/gen))
 (def id-2 (uuid/gen))

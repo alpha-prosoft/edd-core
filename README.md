@@ -1,84 +1,235 @@
-# Event Driven Design Elements (edd-el)
+# edd-core
 
-Simple lib to support building Event-Sourcing applications.
+Clojure library for event-sourced CQRS services: commands produce events,
+events build aggregates, effects chain commands across services.
 
-
-## Philosophy
 <blockquote>
   It is not a framework!
 </blockquote>
 
-The main idea behind this library was not to be a framework,
-but rather usefull set of function that will express our target
-architecture design.
+The library is a set of functions expressing the target architecture. It pushes
+state to the edge of the system and helps keep handlers pure, without stopping
+you from doing anything else (e.g. using a DB connection directly).
 
-It is designed with freedom. Library expresses desire to have
-stat pushed to the edge of the system and to help engineers
-develop mathematically pure functions. But it has no limitations
-on what you can do (i.e. You can use directly DB connection at
-any time and make stuff dirty).
+`CLAUDE.md` is the implementation guide (registration API, testing patterns),
+`MIGRATIONS.md` lists breaking changes and how to migrate.
 
-## Bootstraping
+## Getting started
 
-# Architecture
+Generate a service with the scaffold (`modules/edd-core-scaffold`):
 
-Entire system is build around 2 main components:
-1. Event store
-2. Aggregate store
-
-# Supported event store implementation
-Currently, implementations supports following event store implementation:
-* PostgreSQL
-* DynamoDB
-
-# Supported aggregate store implementation
-Currently, only one aggregate store is supported:
-* ElasticSearch
-
-## Commands
-To register commands user `reg-cmd`
-
-```
-==>(:require
-       [edd.]))
+```bash
+clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.340.0"}}}' \
+  -M -m edd.scaffold my-svc
 ```
 
-## Register effects
-Output of each individual command are events. Based on events we can determine
-if there are any other actions needed to be executed it he system. This can be
-triggering another service or calling same service recursively (i.e Send email
-after user was created). Commands that are created based on events are called
-`effects`. Effects are stores together with events in a database transactionaly
-and are executed as commands on target services asynchronously.
+It asks for runtime, distributor, stores and deployment and writes a project
+that passes its own tests, with security, authentication and the remote deps
+resolver wired in.
 
-Effects are stored transactionally to make sure that we are not triggering any
-action that is not valid (i.e. Send email when creating user if user creation
-has failed or rolled-back).
+The version is the release of the latest commit,
+`{project.json version}.{commit count}.0` (`./version.sh`); generated deps
+use the same version.
 
-Effect handlers are registered declarative using `edd-core/reg-event-fx`.
+## Modules
 
-Example of effect registration:
+| Module | Provides |
+|---|---|
+| `edd-core` | Registration (`edd.core`), command/query/event pipeline, features, memory stores, Postgres event store, distribution API with the memory transport and the router fan-out, runtime pipeline (`lambda.runtime`, `lambda.http`), test fixtures |
+| `edd-core-aws` | Lambda custom runtime, AWS clients, DynamoDB event store, S3 view store, Cognito authentication and credentials, CloudWatch EMF metrics |
+| `edd-java-lambda-runtime` | Lambda Java runtime with SnapStart |
+| `edd-core-undertow` | Long-running HTTP runtime that also consumes the service queues |
+| `edd-core-sqs` / `edd-core-kafka` | Transports for effects and router messages |
+| `edd-router` | Router service entry point |
+| `edd-core-client` | HTTP client and the HTTP resolver for remote deps |
+| `edd-core-security` | Role-based authorization |
+| `edd-core-opensearch` | OpenSearch view store |
+| `edd-core-view-store-postgres` | Postgres view store with history |
+| `edd-core-scaffold` | Project generator |
+| `edd-core-io`, `-json`, `-parquet`, `-xlsx`, `-nippy`, `-clj`, `-import`, `-dev` | Utilities |
 
-``` clojure
+## Architecture
 
-; When user-create event is creted, trigger command :send email to the same service
-(edd.core/reg-event-fx :user-created
-    (fn [ctx events]
-         [{:id "2"
-           :cmd-id :send-email}]))
+A service registers commands, events, effects and queries on a ctx map and
+runs on a runtime:
 
-; When user-create event is creted, trigger command :send email to the :email-sending-svc
-(edd.core/reg-event-fx :user-created
-    (fn [ctx events]
-         [{:service :email-sending-svc
-           :commands [{:id "2"
-                       :cmd-id :send-email}]
-                       :meta {}}]))
+```
+Command → Handler → Events → Event Store
+                  ↓
+                  Effects (reg-event-fx) → router → other services' commands
+                  ↓
+                  Aggregate (reg-event) → View Store
 ```
 
-Output of fx handler can be either vector or map. If output is map it can contain `:service`
-keyword which would indicate that target is another service. In that case we have to have
-actual commands inside `:commands` vector
+- Event stores: Postgres, DynamoDB, memory.
+- View stores: Postgres, OpenSearch, S3, memory.
+
+### Effects
+
+Effects are commands created from events. They are stored with the events in
+one transaction and executed asynchronously on the target service, so nothing
+is triggered for a command that failed or rolled back.
+
+```clojure
+; same service
+(edd.core/reg-event-fx ctx :user-created
+  (fn [ctx event]
+    {:cmd-id :send-email
+     :id (:id event)}))
+
+; another service
+(edd.core/reg-event-fx ctx :user-created
+  (fn [ctx event]
+    {:service :email-svc
+     :commands [{:cmd-id :send-email
+                 :id (:id event)}]}))
+```
+
+### Runtimes and filters
+
+A runtime runs a handler, `(fn [ctx request] response)`. Pick it explicitly:
+call the runtime's own start (`aws.lambda/lambda-custom-runtime`,
+`edd.undertow.core/start`, `edd.java-lambda-runtime.core/start`) or
+`lambda.core/start` with `:edd/runtime` / `-Dedd.runtime`. There is no
+default runtime.
+
+Each runtime decodes its input the same way: HTTP requests (API Gateway on
+Lambda, Undertow) go through `lambda.http`, which answers `/health`,
+authenticates the user, distributes router payloads and encodes the
+response. Queue records (SQS, Kafka) are handled one request each. Both run
+through the `:filters` and then the handler.
+
+#### edd service
+
+`edd.core/handler` dispatches commands and queries to the registrations on
+ctx:
+
+```mermaid
+flowchart LR
+  http[HTTP request] --> lhttp["lambda.http<br/>/health, user, decode"]
+  queue[Queue record] --> records[lambda.runtime/handle-records]
+  lhttp --> filters[":filters"]
+  records --> filters
+  filters --> edd[edd.core/handler]
+  edd --> cmd["commands<br/>events, effects"]
+  edd --> query[queries]
+  cmd --> stores[("event store<br/>view store")]
+  query --> stores
+  edd --> dist["distribute<br/>router payloads"]
+  dist --> router[router]
+```
+
+```clojure
+(lambda.core/start
+ (assoc ctx :edd/runtime "edd.undertow.core/start")
+ edd.core/handler
+ :filters [aws.filters/from-bucket])
+```
+
+#### Own handler
+
+Any other fn runs on the same runtimes, with the same decoding,
+authentication and filters, and without the edd pipeline:
+
+```mermaid
+flowchart LR
+  http[HTTP request] --> lhttp["lambda.http<br/>/health, user, decode"]
+  queue[Queue record] --> records[lambda.runtime/handle-records]
+  lhttp --> filters[":filters"]
+  records --> filters
+  filters --> handler["your handler<br/>(fn [ctx request] response)"]
+```
+
+```clojure
+(defn handler
+  [ctx request]
+  {:echo request})
+
+(lambda.core/start
+ (assoc ctx :edd/runtime "aws.lambda/lambda-custom-runtime")
+ handler)
+```
+
+It needs no distributor.
+
+#### Filters
+
+`:filters` wrap the handler like servlet filters, first one outermost:
+
+```clojure
+(defn audit
+  [ctx request chain]
+  (let [response (chain ctx request)]
+    (log/info "handled" (:request-id request))
+    response))
+
+(lambda.core/start ctx edd.core/handler :filters [aws.filters/from-bucket audit])
+```
+
+### Distribution
+
+Effects and events reach other services through the router. A service
+registers one transport: `edd.sqs.distributor/register`,
+`edd.kafka.distributor/register`, or `edd.distribution.memory/register` in
+tests (`mock/ctx` already has it). The router registers the same transport and
+runs `edd.router.core/handler`. Without a transport every request to
+`edd.core/handler` fails with `No distributor registered`.
+
+Responses travel to the router inline. A service with big responses registers
+a response cache, `(edd.response.s3/register ctx)`: the response is stored in
+S3 in parts and the router messages carry only references.
+
+### Remote dependencies
+
+`:deps` with a `:service` are resolved by the registered deps resolver;
+startup fails without one. `edd-core-client` provides the HTTP resolver with
+pluggable credentials:
+
+```clojure
+(edd.client.deps/register ctx {:credentials (aws.cognito/credentials)})
+```
+
+Without `:credentials` the token comes from the `ServiceToken` env var.
+
+### Authentication
+
+HTTP requests run as the user returned by the feature providing
+`:resolve-user`. `(aws.cognito/register ctx)` reads it from the Cognito JWT in
+the `X-Authorization` header (used instead of `Authorization`, which API
+Gateway and load balancers may take over) or from the API Gateway authorizer.
+The role is chosen from the token roles; with several, the request body names
+it with `{:user {:selected-role :user-role}}`.
+
+### Authorization
+
+The `edd-core-security` module adds role-based authorization on top of
+authentication. Policies are AWS-IAM-style data with Malli conditions,
+compiled at startup and evaluated before every command and top-level query:
+
+```
+(security/register ctx
+  :policies [{:description "am can create orders"
+              :principal {:role :account-manager}
+              :effect :allow
+              :action :create-*}])
+```
+
+Alternatively — exclusively, not combined with `:policies` — authorization is
+declared inline on each registration and compiled into the same policies at
+startup:
+
+```
+(edd/reg-cmd ctx :approve-order handler
+  :auth {:role [:supervisor :admin]
+         :fn (fn [ctx cmd] boolean)})
+```
+
+Everything not explicitly allowed is denied — including `:non-interactive`
+(service-to-service) traffic, which needs its own allow policy to keep
+effects and workflows running. Inline `:auth` is only enforced once
+`security/register` is called.
+See `modules/edd-core-security/README.md` for the policy format, condition
+env, evaluation order and audit-mode rollout.
 
 ## JSON Serialization and De-Serialization
 
@@ -109,36 +260,6 @@ serialized prefixed with "#".
 {:a #uuid "d13d8c5c-2704-4fe1-8938-c339db9db15c"}
 => (util/to-edn "{\"a\":\"##some\"}")
 {:a "#some"}
-```
-
-## Building modules
-
-All handlers are easily composable. Handler registration is just currently just adding
-keys to map. Modules are not feature of library. It is just way how to structure code.
-
-Following is example of project structure with module:
-
-``` clojue
-
-```
-
-## Mocking external dependecies
-
-When testing code against edd test fixtures you can declare how dependencies to external
-services will be resolved. Example:
-
-``` clojure
-(mock/with-mock-dal
-      {:deps [{:service        :remote-svc
-               :request-id     request-id
-               :interaction-id interaction-id
-               :meta           meta
-               :query          {:param "Some Value"}
-               :resp           {:remote :response}}]
-       :event-store []
-       ...})
-      ....
-      )
 ```
 
 ## UUID Gen
@@ -172,108 +293,51 @@ is implementation of with-state mock is provided. Example of usage:
 
 ```
 
-## Authentication
-I hearby declare authentication quite unflexible. When using
-from-api filter then user each request is being checked for
-X-Authorization header (X-Authorization is used instead of
-standard because AWS LB and API Gateway sometimes take it over).
-Header should contain signed JWT token.
+## Testing
 
-You can expect to get structure like:
-```
-(def ctx
-  {:user {:id "user-id"
-          :email "user@email"
-          :role :user-role}}
-```
-User role will be slected based on roles present in JWT token. Currently
-only cognito is supported. If there are more than one role possible, it is
-expected to receive `{:selected-role :user-role}` as part of request body.
-If this is not the case then user wil receive anonymous role:
-```
-(def ctx
-  {:user {:id "anonymous"
-          :email "anonymous"
-          :role :anonymous}}
+`edd.test.fixture.dal` runs handlers against in-memory stores:
+
+```clojure
+(mock/with-mock-dal
+  {:event-store [{:event-id :user-created :id user-id}]
+   :deps [{:service :remote-svc
+           :query {:query-id :get-user}
+           :resp {:name "John"}}]}
+  (mock/handle-cmd (my/register mock/ctx)
+                   {:commands [{:cmd-id :update-user :id user-id}]})
+  (mock/verify-state :event-store [...]))
 ```
 
-## Authorization
+`:deps` answer remote dependencies by service, realm and query; `verify-state`
+checks `:event-store`, `:aggregate-store`, `:command-store`, `:identity-store`.
 
-The `edd-core-security` module adds role-based authorization on top of
-authentication. Policies are AWS-IAM-style data with Malli conditions,
-compiled at startup and evaluated before every command and top-level query:
+`edd.test.fixture.runtime` runs the whole request path (authentication, filters,
+`edd.core/handler`, distribution) on the in-memory runtime `lambda.runtime.memory`,
+as an API request of a given user or as a batch of queue records:
 
-```
-(security/register ctx
-  :policies [{:description "am can create orders"
-              :principal {:role :account-manager}
-              :effect :allow
-              :action :create-*}])
-```
+```clojure
+(require '[edd.test.fixture.runtime :as runtime])
 
-Alternatively — exclusively, not combined with `:policies` — authorization is
-declared inline on each registration and compiled into the same policies at
-startup:
-
-```
-(edd/reg-cmd ctx :approve-order handler
-  :auth {:role [:supervisor :admin]
-         :fn (fn [ctx cmd] boolean)})
+(mock/with-mock-dal
+  (let [svc (runtime/start (my/register mock/ctx)
+                           :user {:id "am@example.com" :role :account-manager
+                                  :roles [:account-manager] :realm :test})]
+    (runtime/post svc {:request-id (uuid/gen) :interaction-id (uuid/gen)
+                       :commands [{:cmd-id :update-user :id user-id}]})
+    ;; => {:status 200 :body {:result {...}}}
+    (runtime/handle-records svc [{:apply {:aggregate-id user-id} ...}])
+    ;; => {:responses [...] :redeliver? false}
+    (runtime/routed)))                       ;; records sent to the router
 ```
 
-Everything not explicitly allowed is denied — including `:non-interactive`
-(service-to-service) traffic, which needs its own allow policy to keep
-effects and workflows running. Inline `:auth` is only enforced once
-`security/register` is called.
-See `modules/edd-core-security/README.md` for the policy format, condition
-env, evaluation order and audit-mode rollout.
+| Command | Runs |
+|---|---|
+| `make test-unit` | Unit tests |
+| `make it` | Pre-build setup (Docker, migrations) and integration tests |
+| `make e2e-local` | ping/pong/router on Undertow + Kafka + Postgres in docker compose |
 
-# How to test
-
-## Mock Data access layer
-
-Most of the mocking could be done with clojure **with-redefs** macro.
-For more convenience the namespace **edd.test.fixture.dal** contains couple useful macros
-mocking Data Access Layer. The mocking is done by redefining Data Access Layer function and binding
-state to thread local. So any business logic relays on the database could be tested without using
-in memory database like H2 or test containers.
-
-### Macro: with-mock-dal
-
-This macro redefines all Data Access Layer functions and binds a state which currently is an atom.
-**Caution:** If any Data Access Layer function is added this macro is needed to be extended.
-
-### Macro: verify-state
-
-This macro tests if our expectations about database state are correct, if not test will fail.
-
-### Example
-
-In this test with-mock-dal macro is called with body where event is stored, state assertion
-is done, checking if in memory database contains correct event.
-
-```
-(deftest when-store-and-load-events-then-ok
-  (with-mock-dal (dal/store-event {} {} {:id 1 :info "info"})
-    (verify-state [{:id 1 :info "info"}] :event-store)
-    (let [events (dal/get-events {} 1)]
-      (is (= [{:id 1 :info "info"}]
-             events)))))
-```
-
-In this test with-mock-dal macro is called with body where aggregate is updated multiple times
-and Data Access Layer function search is called upon this aggregate.
-
-```
-(deftest when-query-aggregate-with-unknown-condition-then-return-nothing
-  (with-mock-dal (dal/update-aggregate {} {:id 1 :payload "payload"})
-    (dal/update-aggregate {} {:id 2 :payload "payload"})
-    (dal/update-aggregate {} {:id 3 :payload "pa2"})
-    (is (= [{:id 3 :payload "pa2"}]
-           (dal/simple-search {} {:id 3})))
-    (is (= []
-           (dal/simple-search {} {:id 4})))))
-```
+CI also deploys the same services on Lambda + SQS + DynamoDB + S3 and runs the
+same `e2e/it` suite against both.
 
 # Database Semantics
 
@@ -307,10 +371,10 @@ There is a unique constraint on the tuple [service_name,aggregate_id,event_seq] 
 
 ## Scoped IDs
 ### invocation_id
-_invocation_id_ is an identifier from AWS, which identifies the request that triggered the function invocation. It is copied to the _context_ map from request headers (field lambda-runtime-aws-request-id). It is mainly used to search the logs, to map command execution to log entries.
+_invocation_id_ identifies the invocation that handled the request: the Lambda request id (header lambda-runtime-aws-request-id), or a generated uuid on Undertow. It is mainly used to search the logs, to map command execution to log entries.
 ### request_id
 The _request_id_ is generated by the client (e.g. FE), when a new request to the backend is done. It has to be unique on a per request base, and the client is responsible for keeping this contract.
-CAVEAT: If the request-id is re-used, edd-core will return a cached response for the given request.
+CAVEAT: If the request-id is re-used, edd-core returns the stored response of the first request and distributes its stored events and effects again.
 In the context of one request, multiple commands and corresponding events can be generated.
 One and the same request-id is re-used for all effects triggered by a service call.
 
@@ -325,7 +389,6 @@ Sample values:
 - '0:1' second effect command triggered on original svc
 - '0:1:0' first effect command on transitive svc
 - ...
-
 
 # Logging
 
@@ -366,11 +429,9 @@ INFO Emulating get-command-response-log nil [0]
 
 ## Disable printing metrics
 
-To prevent edd-core from printing metrics every 10 seconds, set the following
-env var when bootstrapping REPL:
+Metrics are logged every 10 seconds; set `DisableMetrics` (any value) to stop
+them, e.g. in a local REPL:
 
-~~~clojure
-AWS_LAMBDA_DISABLE_METRICS=false clojure -M:foo:bar
-~~~
-
-This is for local development only.
+```bash
+DisableMetrics=true clojure -M:dev
+```

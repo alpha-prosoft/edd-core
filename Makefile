@@ -14,18 +14,21 @@ test-it:
 # Full integration test setup (same as CI pipeline)
 it:
 	@echo "Running pre-build setup (CloudFormation + Docker + migrations)..."
-	bash -c "source ./pre-build.sh && echo 'Running integration tests...' && clojure -M:test:it"
+	bash -c "E2E_LOCAL=false source ./pre-build.sh && echo 'Running integration tests...' && clojure -M:test:it"
+# Same ping/pong E2E as on AWS, on Undertow + Kafka + Postgres in docker compose
+e2e-local:
+	bash -c "E2E_LOCAL=false source ./pre-build.sh && ./e2e/run-e2e-local.sh"
 # Cleanup integration test environment
 it-clean:
 	@echo "Cleaning up integration test environment..."
-	docker compose down --volumes --remove-orphans
+	docker compose --profile e2e down --volumes --remove-orphans
 	@echo "Integration test environment cleaned"
 #
 # Run all the known docker-related tests
 test-view-store-postgres:
 	bash -c "source ./pre-build.sh && cd ${PG_VIEW_STORE} && make test"
 test: test-unit test-it
-.PHONY: test test-unit test-it it it-clean
+.PHONY: test test-unit test-it it it-clean e2e-local
 env ?= $(error Please specify the env=... argument, e.g. env=DEV99)
 ENV = $(shell echo $(env) | tr a-z A-Z)
 rebase:
