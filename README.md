@@ -19,7 +19,7 @@ you from doing anything else (e.g. using a DB connection directly).
 Generate a service with the scaffold (`modules/edd-core-scaffold`):
 
 ```bash
-clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.341.0"}}}' \
+clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.342.0"}}}' \
   -M -m edd.scaffold my-svc
 ```
 
@@ -206,12 +206,25 @@ Without `:credentials` the token comes from the `ServiceToken` env var.
 
 ### Authentication
 
-HTTP requests run as the user returned by the feature providing
-`:resolve-user`. `(aws.cognito/register ctx)` reads it from the Cognito JWT in
-the `X-Authorization` header (used instead of `Authorization`, which API
+Authentication is a runtime filter: `(lambda.http/authenticate resolve-user)`
+resolves the user of an HTTP request with `(fn [ctx] user)` and passes requests
+from other sources on. The runtime resolves nobody itself, it only refuses an
+HTTP request that reaches the handler without a user. `aws.cognito/authenticate`
+(edd-core-aws, with `(aws.cognito/register ctx)` for its keys) and
+`edd.undertow.jwt/authenticate` (edd-core-undertow, any identity provider, see
+its README) are such filters. The Cognito one reads the user from the Cognito
+JWT in the `X-Authorization` header (used instead of `Authorization`, which API
 Gateway and load balancers may take over) or from the API Gateway authorizer.
 The role is chosen from the token roles; with several, the request body names
 it with `{:user {:selected-role :user-role}}`.
+
+Queue records have no caller, so a filter fills in their user:
+`(edd.kafka.filters/authenticate)`, `(edd.sqs.filters/authenticate)`,
+`(edd.postgres.distributor.filters/authenticate)`, or
+`(lambda.runtime/authenticate-records)` for every queue record. By default
+that is the service's `:non-interactive` user, so effects and events run as the
+service whoever triggered them; `:resolve-user (fn [ctx request])` picks
+another one. Without such a filter a record runs as the user in its `:meta`.
 
 ### Authorization
 

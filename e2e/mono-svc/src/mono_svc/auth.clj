@@ -1,5 +1,5 @@
 (ns mono-svc.auth
-  (:require [edd.core :as edd]))
+  (:require [lambda.http :as http]))
 
 ;; E2E only: no JWT/Cognito, the user comes straight from the request body
 ;; (realm from its meta).
@@ -9,8 +9,9 @@
     (assoc user :realm (get-in body [:meta :realm]))
     {:id "e2e" :role :non-interactive}))
 
+(def authenticate
+  (http/authenticate request-user))
+
 (defn register
   [ctx]
-  (edd/reg-feature ctx :e2e/public-auth
-                   :deps {}
-                   :resolve-user request-user))
+  ctx)

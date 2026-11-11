@@ -9,6 +9,7 @@
             [edd.postgres.distributor.outbox :as outbox]
             [edd.postgres.pool :as pool]
             [edd.undertow.core :as sut]
+            [lambda.http :as http]
             [lambda.test.fixture.state :refer [*dal-state*]]
             [lambda.util :as util]
             [lambda.uuid :as uuid])
@@ -28,17 +29,11 @@
          (event-store/register
           (distributor/register (flyway/register base))))
 
-        with-auth
-        (edd/reg-feature with-stores :test/auth
-                         :deps {}
-                         :resolve-user (fn [_ctx]
-                                         {:id "tester" :role :tester :realm :test}))
-
         with-commands
         (edd/reg-cmd
-         (edd/reg-cmd with-auth :start (fn [_ctx cmd]
-                                         {:event-id :started
-                                          :id (:id cmd)}))
+         (edd/reg-cmd with-stores :start (fn [_ctx cmd]
+                                           {:event-id :started
+                                            :id (:id cmd)}))
          :finish (fn [_ctx cmd]
                    {:event-id :finished
                     :id (:id cmd)}))]
@@ -85,7 +80,11 @@
           (service-ctx)
 
           server
-          (sut/start ctx edd/handler :port 0 :host "127.0.0.1")
+          (sut/start ctx edd/handler
+                     :port 0
+                     :host "127.0.0.1"
+                     :filters [(http/authenticate (fn [_ctx]
+                                                    {:id "tester" :role :tester :realm :test}))])
 
           id
           (uuid/gen)]

@@ -1,13 +1,12 @@
 (ns lambda.http
   "HTTP requests of every runtime, in the API Gateway proxy shape
    {:path :httpMethod :headers :queryStringParameters :body}: the request
-   body or the GET request parameter becomes the edd request, the user comes
-   from the feature providing :resolve-user, router payloads are distributed
-   and the response is encoded with CORS headers, gzip when accepted and
-   status 500 for errors."
+   body or the GET request parameter becomes the edd request, an
+   authentication filter (authenticate) resolves its user, router payloads
+   are distributed and the response is encoded with CORS headers, gzip when
+   accepted and status 500 for errors."
   (:require [clojure.string :as string]
             [clojure.tools.logging :as log]
-            [edd.ctx :as edd-ctx]
             [lambda.codec :as codec]
             [lambda.gzip :as gzip]
             [lambda.runtime :as runtime]
@@ -49,26 +48,70 @@
     #(= % :non-interactive)
     (:roles user))))
 
-(defn assign-metadata
-  "Puts realm and user into ctx :meta, the user coming from the feature
-   providing :resolve-user (fn [ctx] user), e.g. aws.cognito/register."
-  [{:keys [body] :as ctx}]
+(defn select-role
+  "The role a user with :roles acts in for a request: the one the request
+   selects ({:user {:selected-role r}}), which has to be one of its roles
+   unless the user is :non-interactive; else :non-interactive when it has
+   it; else its first role that is neither :anonymous nor a realm-* marker;
+   :anonymous when nothing is left."
+  [{:keys [roles] :as user} request]
+  (let [selected
+        (get-in request [:user :selected-role])
+
+        service
+        (non-interactive user)]
+    (when (and selected
+               (not service)
+               (not-any? #(= selected %) roles))
+      (throw (ex-info "Selecting non-existing role"
+                      {:message "Selecting non-existing role"
+                       :selected-role selected
+                       :roles roles})))
+    (or selected
+        service
+        (first (remove #(or (= :anonymous %)
+                            (string/starts-with? (name %) "realm-"))
+                       roles))
+        :anonymous)))
+
+(defn with-user
+  "ctx of an HTTP request running as user: realm and user in ctx :meta on
+   top of the request :meta. A :non-interactive user is trusted with the
+   :meta of its request. An authentication filter calls this, the runtime
+   refuses an HTTP request no filter resolved a user for."
+  [ctx request {:keys [role] :as user}]
   (let [{:keys [meta]}
-        body
+        request
 
-        resolve-user
-        (or (edd-ctx/feature-fn ctx :resolve-user)
-            (throw (ex-info "No authentication registered"
-                            {:message "No authentication registered; register one, e.g. (aws.cognito/register ctx)"})))
+        with-meta
+        (if (= :non-interactive role)
+          (assoc ctx :meta meta)
+          (assoc ctx :meta (assoc meta
+                                  :realm (get-realm ctx user {})
+                                  :user (dissoc user :realm))))]
+    (assoc with-meta ::user user)))
 
-        {:keys [role] :as user}
-        (resolve-user ctx)]
-    (if (= :non-interactive
-           role)
-      (assoc ctx :meta meta)
-      (assoc ctx :meta (assoc meta
-                              :realm (get-realm ctx user {})
-                              :user (dissoc user :realm))))))
+(defn authenticate
+  "Runtime filter authenticating HTTP requests: resolve-user is (fn [ctx])
+   returning the user of the request in ctx (:req, :body) or throwing.
+   Requests from other sources pass through."
+  [resolve-user]
+  (fn [ctx request chain]
+    (if (:from-api ctx)
+      (chain (with-user ctx request (resolve-user ctx)) request)
+      (chain ctx request))))
+
+(defn- guarded
+  "The handler behind the filters: an HTTP request has to arrive with a
+   resolved user."
+  [handler]
+  (fn [ctx request]
+    (when-not (::user ctx)
+      (let [message
+            (str "No user resolved for the HTTP request; add an authentication filter to :filters, "
+                 "e.g. (lambda.http/authenticate resolve-user)")]
+        (throw (ex-info message {:message message}))))
+    (handler ctx request)))
 
 (defn- edd-header?
   [header-name]
@@ -190,13 +233,14 @@
      (fn []
        (let [edd-request
              (body request)]
-         (runtime/handle (assign-metadata (assoc ctx :body edd-request))
+         (runtime/handle (assoc ctx
+                                :body edd-request
+                                :handler (guarded (:handler ctx)))
                          edd-request))))))
 
 (defn handle
-  "Runs an HTTP request through the runtime filters and handler as the
-   authenticated user, distributes the router payloads and returns the HTTP
-   response."
+  "Runs an HTTP request through the runtime filters and the handler,
+   distributes the router payloads and returns the HTTP response."
   [ctx request]
   (log-debug-params request)
   (let [ctx

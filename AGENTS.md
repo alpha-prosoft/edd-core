@@ -359,10 +359,26 @@ keeps aggregate snapshots in S3 in front of the OpenSearch/Postgres view store.
 
 ### 11. Authentication
 
-HTTP requests run as the user from the feature providing `:resolve-user`
-(fn [ctx] user). `(aws.cognito/register ctx)` reads it from the Cognito JWT
-(`X-Authorization` header) or the API Gateway authorizer; without such a
-feature HTTP requests are rejected.
+Authentication is a runtime filter in `:filters`:
+`(lambda.http/authenticate resolve-user)` with `resolve-user` (fn [ctx] user);
+requests from other sources pass through it. The runtime resolves nobody, it
+refuses an HTTP request that reaches the handler without a user.
+`aws.cognito/authenticate` (edd-core-aws, plus `(aws.cognito/register ctx)` for
+its keys) reads the user from the Cognito JWT (`X-Authorization` header) or the
+API Gateway authorizer. `(edd.undertow.jwt/authenticate {:discovery-url ..
+:audience .. :claims->user (fn [claims] user)})` (edd-core-undertow) verifies
+the JWT of any identity provider against its JWKS.
+
+Queue records have no caller. `(edd.kafka.filters/authenticate)`,
+`(edd.sqs.filters/authenticate)` and
+`(edd.postgres.distributor.filters/authenticate)` fill in their user, by
+default the service's `:non-interactive` user, so effects run as the service
+whoever triggered them; `(lambda.runtime/authenticate-records)` does it for
+every queue record. `:resolve-user (fn [ctx request])` picks another user.
+
+```clojure
+(undertow/start ctx edd/handler :filters [cognito/authenticate audit-filter])
+```
 
 ## Generating a Service
 
@@ -370,7 +386,7 @@ feature HTTP requests are rejected.
 stores, deployment), see its README:
 
 ```bash
-clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.341.0"}}}' \
+clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.342.0"}}}' \
   -M -m edd.scaffold my-svc
 ```
 
@@ -755,7 +771,7 @@ execution has no `:meta`.
 5. **UUID conflicts**: Use `(uuid/gen)` for new IDs, not hardcoded values
 6. **"No distributor registered"**: Register a transport (see Distribution)
 7. **"Remote deps need a deps resolver"**: Register `edd.client.deps/register`
-8. **"No authentication registered"**: Register `aws.cognito/register` (or another `:resolve-user` feature)
+8. **"No user resolved for the HTTP request"**: Add an authentication filter, `aws.cognito/authenticate` or `(lambda.http/authenticate resolve-user)`
 
 ## Quick Reference
 

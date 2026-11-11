@@ -8,7 +8,9 @@
             [edd.common :as common]
             [edd.core :as edd]
             [edd.security :as security]
-            [aws.filters :as aws-filters]))
+            [aws.filters :as aws-filters]
+            [lambda.http :as http]
+            [lambda.runtime :as runtime]))
 
 (def max-hops 5)
 
@@ -20,16 +22,6 @@
   (if-let [user (:user body)]
     (assoc user :realm (get-in body [:meta :realm]))
     {:id "e2e" :role :non-interactive}))
-
-;; Effects arrive through the queue from the router; they run as the service's
-;; :non-interactive user regardless of who triggered the originating command.
-;; The request meta is stamped since handle-commands merges it over ctx meta.
-(defn non-interactive-queue
-  [ctx request chain]
-  (chain ctx (if (:from-api ctx)
-               request
-               (assoc-in request [:meta :user] {:id (name (:service-name ctx))
-                                                :role :non-interactive}))))
 
 (defn current-dep
   [_deps cmd]
@@ -155,12 +147,11 @@
 
 (defn init
   [ctx]
-  (let [with-auth
-        (edd/reg-feature (aws-ctx/register ctx) :e2e/public-auth
-                         :deps {}
-                         :resolve-user request-user)]
-    (register (deps/register with-auth {:credentials (cognito/credentials)}))))
+  (register (deps/register (aws-ctx/register ctx) {:credentials (cognito/credentials)})))
 
+;; Effects arrive through the queue from the router; they run as the service's
+;; :non-interactive user regardless of who triggered the originating command.
 (def request-filters
-  [aws-filters/from-bucket
-   non-interactive-queue])
+  [(http/authenticate request-user)
+   aws-filters/from-bucket
+   (runtime/authenticate-records)])

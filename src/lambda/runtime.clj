@@ -101,16 +101,47 @@
            (some :exception response)
            (:exception response))))
 
+(defn service-user
+  "The service itself as the user of requests nobody stands behind."
+  [ctx]
+  {:id (name (:service-name ctx))
+   :role :non-interactive})
+
+(defn authenticate-records
+  "Runtime filter filling in the user of queue records: effects and events
+   arrive without a caller, so they run as the service's :non-interactive
+   user whoever triggered the command they come from. options:
+     :source        only records of this :eventSource (\"edd:kafka\",
+                    \"aws:sqs\", ..), default every queue record
+     :resolve-user  (fn [ctx request]) returning the user, default
+                    service-user
+   The user goes to the request [:meta :user]; HTTP requests and other
+   events pass through."
+  ([]
+   (authenticate-records {}))
+  ([{:keys [source resolve-user]
+     :or {resolve-user (fn [ctx _request]
+                         (service-user ctx))}}]
+   (fn [ctx request chain]
+     (let [{:keys [eventSource] :as record}
+           (:record ctx)]
+       (if (and record
+                (or (nil? source) (= source eventSource)))
+         (chain ctx (assoc-in request [:meta :user] (resolve-user ctx request)))
+         (chain ctx request))))))
+
 (defn handle-records
-  "Handles queue records in order, each body as one request, and stops at
-   the first failure. Returns the responses of the handled records."
+  "Handles queue records in order, each body as one request with the
+   record in ctx :record, and stops at the first failure. Returns the
+   responses of the handled records."
   [ctx records]
   (loop [[record & more] records
          responses []]
     (if-not record
       responses
       (let [response
-            (handle-with ctx #(handle ctx (distribution/unwrap ctx (util/to-edn (:body record)))))
+            (handle-with ctx #(handle (assoc ctx :record record)
+                                      (distribution/unwrap ctx (util/to-edn (:body record)))))
 
             handled
             (conj responses response)]

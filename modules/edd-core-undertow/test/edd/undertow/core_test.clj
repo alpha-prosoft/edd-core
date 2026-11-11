@@ -6,9 +6,13 @@
             [edd.distribution :as distribution]
             [edd.distribution.memory :as memory]
             [edd.undertow.core :as sut]
+            [lambda.http :as http]
+            [lambda.http :as http]
             [lambda.util :as util]
             [lambda.uuid :as uuid])
-  (:import [java.net URI]
+  (:import [io.undertow.server HttpServerExchange]
+           [io.undertow.util HttpString]
+           [java.net URI]
            [java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers HttpResponse HttpResponse$BodyHandlers]))
 
 (def broker
@@ -26,15 +30,16 @@
         (event-store/register
          (view-store/register
           (memory/register base broker)))]
-    (edd/reg-cmd (edd/reg-feature with-stores :test/auth
-                                  :deps {}
-                                  :resolve-user (fn [_ctx]
-                                                  {:id "tester" :role :tester :realm :test}))
+    (edd/reg-cmd with-stores
                  :create-thing
                  (fn [_ctx cmd]
                    {:event-id :thing-created
                     :id (:id cmd)
                     :attrs (:attrs cmd)}))))
+
+(def ^:private authenticate
+  (http/authenticate (fn [_ctx]
+                       {:id "tester" :role :tester :realm :test})))
 
 (defn- with-server
   [f & {:keys [consume]
@@ -44,6 +49,7 @@
                    edd/handler
                    :port 0
                    :host "127.0.0.1"
+                   :filters [authenticate]
                    :consume consume)]
     (try
       (f (str "http://127.0.0.1:" (sut/port server)))
@@ -147,13 +153,9 @@
 
 (defn- ctx-without-distributor
   []
-  (edd/reg-feature {:service-name :no-distributor-svc
-                    :environment-name-lower "local"
-                    :hosted-zone-name "example.com"}
-                   :test/auth
-                   :deps {}
-                   :resolve-user (fn [_ctx]
-                                   {:id "tester" :role :tester :realm :test})))
+  {:service-name :no-distributor-svc
+   :environment-name-lower "local"
+   :hosted-zone-name "example.com"})
 
 (defn- post-to-server!
   [handler body]
@@ -161,7 +163,8 @@
         (sut/start (ctx-without-distributor)
                    handler
                    :port 0
-                   :host "127.0.0.1")]
+                   :host "127.0.0.1"
+                   :filters [authenticate])]
     (try
       (post! (str "http://127.0.0.1:" (sut/port server) "/") body)
       (finally
@@ -217,6 +220,7 @@
                    handler
                    :port 0
                    :host "127.0.0.1"
+                   :filters [authenticate]
                    :consume ["commands"])
 
         url
@@ -239,3 +243,221 @@
             (long (second (first (filter (fn [[from _renewed]] (= :queue from)) @seen)))))))
       (finally
         (sut/stop server)))))
+
+(defn- with-listeners
+  [listeners f]
+  (let [server
+        (sut/start (service-ctx)
+                   edd/handler
+                   :filters [authenticate]
+                   :listeners listeners
+                   :consume [])]
+    (try
+      (f server)
+      (finally
+        (sut/stop server)))))
+
+(defn- url
+  [server listener path]
+  (str "http://127.0.0.1:" (sut/port server listener) path))
+
+(defn- create-thing
+  []
+  {:request-id (uuid/gen)
+   :interaction-id (uuid/gen)
+   :meta {:realm :test}
+   :commands [{:cmd-id :create-thing
+               :id (uuid/gen)
+               :attrs {:name "first"}}]})
+
+(defn- answer!
+  [^HttpServerExchange exchange ^String text]
+  (.put (.getResponseHeaders exchange) (HttpString. "X-Listener") "own")
+  (with-open [out (.getOutputStream exchange)]
+    (.write out (.getBytes text "UTF-8"))))
+
+(deftest listener-handler-gets-the-runtime-and-the-exchange-test
+  (let [seen
+        (atom nil)
+
+        echo
+        (fn [runtime ^HttpServerExchange exchange]
+          (reset! seen {:runtime runtime
+                        :exchange exchange
+                        :io-thread? (.isInIoThread exchange)})
+          (answer! exchange (str (.getRequestMethod exchange)
+                                 " "
+                                 (.getRequestPath exchange)
+                                 " "
+                                 (slurp (.getInputStream exchange)))))]
+    (with-listeners {:default {:port 0 :host "127.0.0.1"}
+                     :public {:port 0 :host "127.0.0.1" :handler echo}}
+      (fn [server]
+        (let [response
+              (post! (url server :public "/anything") {:value 1})]
+
+          (is
+           (= "POST /anything {\"value\":1}"
+              (.body response)))
+
+          (is
+           (= "own"
+              (.orElse (.firstValue (.headers response) "X-Listener") nil)))
+
+          (is
+           (identical? server
+                       (:runtime @seen)))
+
+          (is
+           (instance? HttpServerExchange
+                      (:exchange @seen)))
+
+          (is
+           (false?
+            (:io-thread? @seen))))
+
+        (testing "the default listener still serves edd requests"
+          (is
+           (true?
+            (:healthy (util/to-edn (.body (get! (url server :default "/health")))))))
+
+          (is
+           (= (sut/port server)
+              (sut/port server :default))))
+
+        (testing "every listener has its own port"
+          (is
+           (not= (sut/port server :default)
+                 (sut/port server :public))))))))
+
+(deftest listener-handler-delegates-to-edd-test
+  (reset! broker {})
+  (let [routed
+        (fn [runtime ^HttpServerExchange exchange]
+          (if (= "/api/command" (.getRequestPath exchange))
+            (sut/handle-edd runtime exchange)
+            (answer! exchange "own")))]
+    (with-listeners {:default false
+                     :public {:port 0 :host "127.0.0.1" :handler routed}}
+      (fn [server]
+        (is
+         (= {:success true
+             :events 1}
+            (select-keys (:result (util/to-edn (.body (post! (url server :public "/api/command") (create-thing)))))
+                         [:success :events])))
+
+        (is
+         (= "own"
+            (.body (get! (url server :public "/other")))))
+
+        (is
+         (= ["router"]
+            (keys (memory/published (service-ctx)))))))))
+
+(deftest handle-request-runs-in-process-test
+  (reset! broker {})
+  (with-listeners {:default false}
+    (fn [server]
+      (let [response
+            (sut/handle-request server {:path "/command"
+                                        :httpMethod "POST"
+                                        :headers {}
+                                        :body (util/to-json (create-thing))})]
+        (is
+         (= 200
+            (:statusCode response)))
+
+        (is
+         (= {:success true
+             :events 1}
+            (select-keys (:result (util/to-edn (:body response))) [:success :events])))
+
+        (testing "as the authenticated user, distributed like an HTTP request"
+          (is
+           (= ["router"]
+              (keys (memory/published (service-ctx)))))))
+
+      (testing "a request edd refuses answers like the default listener"
+        (is
+         (= 500
+            (:statusCode (sut/handle-request server {:path "/query"
+                                                     :httpMethod "POST"
+                                                     :headers {}
+                                                     :body "not json"}))))))))
+
+(deftest handle-request-throws-what-handle-edd-answers-test
+  (with-listeners {:default {:port 0 :host "127.0.0.1"}}
+    (fn [server]
+      (with-redefs [http/handle (fn [_ctx _request]
+                                  (throw (ex-info "Distribution failed" {})))]
+        (is
+         (thrown-with-msg? clojure.lang.ExceptionInfo
+                           #"Distribution failed"
+                           (sut/handle-request server {:path "/command"
+                                                       :httpMethod "POST"
+                                                       :headers {}
+                                                       :body (util/to-json (create-thing))})))
+
+        (let [response
+              (post! (url server :default "/command") (create-thing))]
+          (is
+           (= 500
+              (.statusCode response)))
+
+          (is
+           (= {:error "Distribution failed"}
+              (util/to-edn (.body response)))))))))
+
+(deftest no-default-listener-test
+  (with-listeners {:default false
+                   :public {:port 0 :host "127.0.0.1" :handler (fn [_runtime exchange] (answer! exchange "own"))}}
+    (fn [server]
+      (is
+       (= [:public]
+          (keys (:servers server))))
+
+      (testing "the only listener is the one port names"
+        (is
+         (= (sut/port server :public)
+            (sut/port server))))))
+
+  (with-listeners {:default nil}
+    (fn [server]
+      (is
+       (empty?
+        (:servers server))))))
+
+(deftest default-listener-with-its-own-handler-test
+  (with-listeners {:default {:port 0 :host "127.0.0.1" :handler (fn [_runtime exchange] (answer! exchange "own"))}}
+    (fn [server]
+      (is
+       (= "own"
+          (.body (get! (url server :default "/health"))))))))
+
+(deftest listener-limits-request-bodies-test
+  (let [echo
+        (fn [_runtime ^HttpServerExchange exchange]
+          (answer! exchange (str (count (slurp (.getInputStream exchange))))))]
+    (with-listeners {:default false
+                     :small {:port 0 :host "127.0.0.1" :handler echo :max-entity-size 64}
+                     :large {:port 0 :host "127.0.0.1" :handler echo}}
+      (fn [server]
+        (let [body
+              {:value (apply str (repeat 200 "a"))}]
+          (is
+           (= 413
+              (.statusCode (post! (url server :small "/") body))))
+
+          (is
+           (= 200
+              (.statusCode (post! (url server :large "/") body)))))))))
+
+(deftest listener-without-handler-is-refused-test
+  (is
+   (thrown-with-msg? clojure.lang.ExceptionInfo
+                     #"Listener :public needs a :port and a :handler"
+                     (sut/start (service-ctx)
+                                edd/handler
+                                :listeners {:default false
+                                            :public {:port 0}}
+                                :consume []))))

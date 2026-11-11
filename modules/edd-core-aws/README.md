@@ -8,7 +8,7 @@ EMF metrics (`edd.aws-emf.core`) and Cognito.
 (-> ctx
     (edd.dynamodb.event-store/register)
     (edd.s3.view-store/register)
-    (aws.cognito/register)                                           ; HTTP users from Cognito tokens
+    (aws.cognito/register)                                           ; keys for aws.cognito/authenticate
     (edd.client.deps/register {:credentials (aws.cognito/credentials)})) ; Cognito token for remote deps
 ```
 

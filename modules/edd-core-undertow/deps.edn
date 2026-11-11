@@ -1,5 +1,7 @@
 {:deps {app-group-id/edd-core {:local/root "../../"}
-        io.undertow/undertow-core {:mvn/version "2.4.4.Final"}}
+        io.undertow/undertow-core {:mvn/version "2.4.4.Final"}
+        com.auth0/java-jwt {:mvn/version "4.5.1"}
+        com.auth0/jwks-rsa {:mvn/version "0.23.0"}}
  :paths ["src"]
  :aliases {:build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
                    :ns-default build}

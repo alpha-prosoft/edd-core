@@ -5,6 +5,7 @@
   (:require [edd.core :as edd]
             [edd.distribution.memory :as memory-distribution]
             [edd.test.fixture.dal :as mock]
+            [lambda.http :as http]
             [lambda.runtime.memory :as runtime]
             [lambda.util :as util]))
 
@@ -24,12 +25,9 @@
           :or {handler edd/handler
                filters []
                api-user user}}]
-  (let [authenticated
-        (edd/reg-feature ctx :edd.test/authentication
-                         :resolve-user (fn [_ctx] api-user))]
-    (runtime/start (assoc authenticated :invocation-id 0)
-                   handler
-                   :filters filters)))
+  (runtime/start (assoc ctx :invocation-id 0)
+                 handler
+                 :filters (into [(http/authenticate (fn [_ctx] api-user))] filters)))
 
 (defn post
   "Posts the edd request to the API, returns {:status :body} with the parsed

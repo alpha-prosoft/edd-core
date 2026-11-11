@@ -138,13 +138,6 @@
       (str "(fn [ctx] ctx') - long-running runtimes call it for every "
            "invocation, e.g. to renew credentials that expire.")}
      [:fn fn?]]
-    [:resolve-user
-     {:optional true
-      :description
-      (str "(fn [ctx]) - user of an API request, used by "
-           "lambda.http. Returns ctx with :user, or "
-           "{:error ..}.")}
-     [:fn fn?]]
     [:schema
      {:optional true
       :description
@@ -182,6 +175,10 @@
         (assoc options
                :feature-id feature-id
                :deps (get options :deps {}))]
+    (when (contains? options :resolve-user)
+      (throw (ex-info (str ":resolve-user was removed, authentication is a runtime filter: "
+                           ":filters [(lambda.http/authenticate resolve-user)]; see MIGRATIONS.md")
+                      {:feature feature-id})))
     (when-not (m/validate EddCoreRegFeature options)
       (throw (ex-info "Invalid feature registration"
                       {:explain (-> (m/explain EddCoreRegFeature options)

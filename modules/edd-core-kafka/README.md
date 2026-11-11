@@ -15,6 +15,9 @@ Kafka properties go under `:producer` and `:consumer`.
   router topic.
 - Messages are limited to 1 MB; there is no offload of bigger bodies.
 - The message key is the group id, keeping per-aggregate order.
+- `(edd.kafka.filters/authenticate)` in `:filters` fills in the user of consumed records, by default the
+  service's `:non-interactive` user; `:resolve-user (fn [ctx request])` picks another, the record is in
+  ctx `:record`.
 - Consumers use the service name as group id and commit each record after it
   succeeds; a failed record is re-delivered.
 - `docker compose up kafka kafka-ui` starts a broker on 9092 and a UI on 8090;

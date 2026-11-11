@@ -2,6 +2,30 @@
 
 ## Changes
 
+**[AP-1035]** Authentication as runtime filter, Undertow listeners
+- authentication is a runtime filter in the ordered :filters vector:
+  (lambda.http/authenticate resolve-user), aws.cognito/authenticate
+  for Cognito; requests from other sources pass through it
+- the runtime no longer resolves the user, it refuses an HTTP
+  request that reaches the handler without one
+- :resolve-user features are removed and fail at registration,
+  lambda.http/assign-metadata is replaced by with-user
+- scaffold, e2e services and edd.test.fixture.runtime authenticate
+  through the filter
+- edd-core-undertow: :listeners starts more HTTP listeners with their
+  own handlers next to the edd one, on a shared worker pool;
+  handle-edd and handle-request serve edd requests from them
+- edd-core-undertow: edd.undertow.jwt/authenticate verifies the JWT
+  of any identity provider against its JWKS (discovery or JWKS URL),
+  :claims->user turns the verified claims into the user
+- queue records get their user from a filter: edd.kafka.filters,
+  edd.sqs.filters, edd.postgres.distributor.filters authenticate, or
+  lambda.runtime/authenticate-records for every record; by default
+  the service's :non-interactive user; the record is in ctx :record
+- lambda.http/select-role holds the role rules (selected role,
+  :non-interactive, :anonymous) for Cognito and the JWT filter
+- see MIGRATIONS.md
+
 **[AP-1032]** Cleanup testing and scafolding
 - edd-core-distributor-postgres: transport for a single service on
   the Postgres event store, effects and events are delivered to the

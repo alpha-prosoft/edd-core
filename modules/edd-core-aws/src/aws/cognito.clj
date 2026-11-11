@@ -1,9 +1,9 @@
 (ns aws.cognito
   "Cognito for HTTP requests (lambda.http) and service-to-service calls:
-   register makes the API filter verify the token (JWKS) and read realm,
-   roles and attributes from the Cognito claims or the API Gateway
-   authorizer; credentials authorize remote deps with the service's
-   Cognito token."
+   the authenticate filter verifies the token (JWKS, loaded by register)
+   and reads realm, roles and attributes from the Cognito claims or the
+   API Gateway authorizer; credentials authorize remote deps with the
+   service's Cognito token."
   (:require [aws.ctx :as aws-ctx]
             [clojure.string :as string]
             [edd.core :as edd]
@@ -84,24 +84,7 @@
   [{:keys [body] :as ctx} user-claims]
   (let [{:keys [roles realm] :as user} (extract-user ctx user-claims)
         attrs (extract-attrs user-claims)
-        selected-role (-> body :user :selected-role)
-        role (if (and selected-role
-                      (not-any? #(= % selected-role)
-                                roles)
-                      (not (http/non-interactive user)))
-               (throw (ex-info "Selecting non-existing role"
-                               {:message       "Selecting non-existing role"
-                                :selected-role selected-role
-                                :roles         roles}))
-               selected-role)
-        role (or role
-                 (http/non-interactive user)
-                 (first (remove
-                         #(or (= % :anonymous)
-                              (string/starts-with? (name %)
-                                                   "realm-"))
-                         roles)))
-        role (or role :anonymous)
+        role (http/select-role user body)
 
         user (cond-> (merge user {:role role})
                realm (assoc :realm realm))]
@@ -117,13 +100,17 @@
       (throw (ex-info "User authentication error" error)))
     (parse-authorizer-user ctx user-claims)))
 
+(def authenticate
+  "Runtime filter: HTTP requests run as the user of their Cognito token.
+   Needs (register ctx)."
+  (http/authenticate resolve-user))
+
 (defn register
-  "API users from Cognito tokens."
+  "Loads what verifying Cognito tokens needs; authenticate is the filter."
   [ctx]
   (edd/reg-feature (aws-ctx/register ctx) :edd/cognito
                    :deps {}
-                   :init jwt/fetch-jwks-keys
-                   :resolve-user resolve-user))
+                   :init jwt/fetch-jwks-keys))
 
 (def ^:private refresh-before-ms
   (* 5 60 1000))

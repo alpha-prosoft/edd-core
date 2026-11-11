@@ -1,7 +1,11 @@
 (ns projectname.auth
   (:require [aws.cognito :as cognito]))
 
+(def authenticate
+  "Runtime filter resolving the user of HTTP requests."
+  cognito/authenticate)
+
 (defn register
-  "Authentication of HTTP requests."
+  "What authenticate needs on ctx."
   [ctx]
   (cognito/register ctx))

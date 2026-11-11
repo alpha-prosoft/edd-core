@@ -56,6 +56,26 @@ them instead of calling `lambda.runtime/init` and `edd.ctx/init-features` itself
 
 `io.forward/yaml` is no longer a dependency of edd-core; a service using `yaml.core` declares it.
 
+## Authentication is a runtime filter
+
+`:resolve-user` features are gone (registering one fails with a pointer here). The runtime no longer
+resolves the user of an HTTP request; a filter does, and the runtime refuses an HTTP request that
+reaches the handler without one (`No user resolved for the HTTP request`).
+
+- Cognito: keep `(aws.cognito/register ctx)` and add the filter,
+  `:filters [aws.cognito/authenticate ...]`.
+- Own authentication: `:filters [(lambda.http/authenticate (fn [ctx] user)) ...]` instead of
+  `(edd/reg-feature ctx :my/auth :resolve-user (fn [ctx] user))`. A filter that does more calls
+  `(lambda.http/with-user ctx request user)` itself.
+- Filters stay one ordered vector for every source; `authenticate` passes queue records and other
+  events on untouched. `lambda.http/assign-metadata` is gone.
+- Tests: `edd.test.fixture.runtime/start` adds the filter for its `:user`.
+- Queue records get their user from a filter too: `(edd.kafka.filters/authenticate)`,
+  `(edd.sqs.filters/authenticate)`, `(edd.postgres.distributor.filters/authenticate)` or
+  `(lambda.runtime/authenticate-records)` put the service's `:non-interactive` user into the request
+  `:meta` (`:resolve-user` for another one). This replaces filters services wrote for it; without one
+  a record still runs as the user in its `:meta`. The record is in ctx `:record`.
+
 ## DANGER: two applied SQL migrations changed
 
 Two migration files that are already applied in existing databases were edited, so their Flyway
@@ -128,8 +148,7 @@ Add `com.alpha-prosoft/edd-core-aws`; namespaces keep their names:
 `aws.*`, `sdk.aws.*`, `lambda.jwt`, `edd.dynamodb.event-store`, `edd.s3.view-store`,
 `edd.aws-emf.core` (edd-core-aws-emf is merged into it), the Lambda runtime and `lambda.test.fixture.core`.
 
-- HTTP requests need an authentication feature: `(aws.cognito/register ctx)` restores the Cognito
-  behaviour. Cognito helpers
+- HTTP requests need authentication (see "Authentication is a runtime filter"). Cognito helpers
   (`extract-user`, `parse-authorizer-user`, `check-user-role`, `extract-attrs`) moved to `aws.cognito`;
   `from-bucket` and `parse-key` moved to `aws.filters`.
 - `edd.core/fetch-from-s3` is gone; transports resolve big bodies themselves (`:unwrap`).
@@ -154,12 +173,11 @@ and the queue records of Undertow consumers, one record per request. Startup fai
 while the old options are used.
 
 - Drop `lambda.filters/from-api`, `from-queue` and `:post-filter lambda.filters/to-api`; `lambda.filters`
-  is gone (`parse-query-string`, `get-realm`, `assign-metadata` are in `lambda.http`).
+  is gone (`parse-query-string` and `get-realm` are in `lambda.http`).
 - Filters are `(fn [ctx request chain])` around the handler, first one outermost: call
   `(chain ctx request)` to proceed and post-process its response, or answer without calling it.
   `{:cond :fn :init}` maps must be rewritten, `:init` goes to a feature.
 - `aws.filters/from-bucket` is such a filter: `:filters [aws.filters/from-bucket]`.
-- An API filter that set the user itself becomes a feature providing `:resolve-user (fn [ctx] user)`.
 - `edd.core/handler` handles one request; SQS batches reach it record by record
   (`lambda.runtime/handle-records`), `edd.core/prepare-response` and `filter-queue-request` are gone.
 - `edd.router.core/handler` routes one router message.

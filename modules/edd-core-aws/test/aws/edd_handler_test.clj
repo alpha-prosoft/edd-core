@@ -75,7 +75,7 @@
        (core/lambda-custom-runtime
         (cognito/register (prepare))
         edd/handler
-        :filters [aws-filters/from-bucket])
+        :filters [cognito/authenticate aws-filters/from-bucket])
        (verify-distributed-response)
        (verify-traffic-edn [{:method  :get
                              :timeout 90000000
@@ -120,7 +120,8 @@
                      :body (char-array "Of something")}]
          (core/lambda-custom-runtime
           (cognito/register (prepare))
-          edd/handler)
+          edd/handler
+          :filters [cognito/authenticate])
          (verify-distributed-response)
          (verify-traffic-edn [{:method  :get
                                :timeout 90000000
@@ -180,7 +181,8 @@
          :invocations [(api-request cmd)]
          (core/lambda-custom-runtime
           (cognito/register mock/ctx)
-          edd/handler)
+          edd/handler
+          :filters [cognito/authenticate])
          (log/info "Nothing nere to check"))))))
 
 (deftest test-query-when-missing-selected-role
@@ -214,5 +216,6 @@
          :invocations [(api-request cmd)]
          (core/lambda-custom-runtime
           (cognito/register mock/ctx)
-          edd/handler)
+          edd/handler
+          :filters [cognito/authenticate])
          (log/info "Nothing nere to check"))))))

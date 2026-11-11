@@ -385,7 +385,8 @@
     (cognito/register (memory-distribution/register {}))
     (fn [ctx body]
       {:source body
-       :user   (get-in ctx [:meta :user])}))
+       :user   (get-in ctx [:meta :user])})
+    :filters [cognito/authenticate])
    (verify-traffic-edn
     [{:timeout 90000000
       :method  :get
@@ -423,7 +424,8 @@
     (cognito/register (memory-distribution/register {}))
     (fn [ctx body]
       {:source body
-       :user   (get-in ctx [:meta :user])}))
+       :user   (get-in ctx [:meta :user])})
+    :filters [cognito/authenticate])
    (verify-traffic-edn
     [{:timeout 90000000
       :method  :get
@@ -461,7 +463,8 @@
     (fn [ctx body]
       {:source body
        :user   (get-in ctx [:meta :user])
-       :realm  (get-in ctx [:meta :realm])}))
+       :realm  (get-in ctx [:meta :realm])})
+    :filters [cognito/authenticate])
    (verify-traffic-edn
     [{:method  :get
       :timeout 90000000
@@ -491,7 +494,8 @@
     (cognito/register (memory-distribution/register {}))
     (fn [ctx body]
       {:source body
-       :user   (get-in ctx [:meta :user])}))
+       :user   (get-in ctx [:meta :user])})
+    :filters [cognito/authenticate])
    (verify-traffic-edn
     [{:method  :get
       :timeout 90000000
@@ -519,7 +523,8 @@
     (cognito/register (memory-distribution/register {}))
     (fn [ctx body]
       {:source body
-       :user   (:user ctx)}))
+       :user   (:user ctx)})
+    :filters [cognito/authenticate])
    (verify-traffic-edn
     [{:method  :get
       :timeout 90000000
@@ -543,7 +548,8 @@
    (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [_ctx _body]
-      {:error "Some error"}))
+      {:error "Some error"})
+    :filters [cognito/authenticate])
    (verify-traffic-edn
     [{:method  :get
       :timeout 90000000
@@ -567,7 +573,8 @@
    (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [_ctx _body]
-      (throw (new RuntimeException "Some error"))))
+      (throw (new RuntimeException "Some error")))
+    :filters [cognito/authenticate])
    (verify-traffic-edn
     [{:method  :get
       :timeout 90000000
@@ -598,7 +605,8 @@
    (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [_ctx _body]
-      {:healthy false}))
+      {:healthy false})
+    :filters [cognito/authenticate])
    (verify-traffic-edn
     [{:method  :get
       :timeout 90000000
@@ -623,7 +631,8 @@
    (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [_ctx _body]
-      {:healthy false}))
+      {:healthy false})
+    :filters [cognito/authenticate])
    (verify-traffic-edn
     [{:method  :get
       :timeout 90000000
@@ -654,7 +663,8 @@
               :c :d}
              (select-keys ctx [:a :c])))
       {:source body
-       :user   (:user ctx)}))))
+       :user   (:user ctx)})
+    :filters [cognito/authenticate])))
 
 (deftest test-to-api-serialization-exception
 
