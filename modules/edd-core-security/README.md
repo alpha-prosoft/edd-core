@@ -12,7 +12,7 @@ evaluated before every command and top-level query handler.
   (:require [edd.security :as security]))
 
 (defn -main [& _args]
-  (lambda/start
+  (undertow/start
     (-> {}
         (assoc :service-name :myapp-svc)
         (module/register)

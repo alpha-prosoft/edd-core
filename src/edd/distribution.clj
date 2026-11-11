@@ -35,6 +35,8 @@
                        failing out of source
      :unwrap           (fn [ctx body]) resolves a body the transport replaced
                        by a reference when it was too big
+     :on-store         (fn [ctx resp]) called by the Postgres event store in
+                       the transaction storing a command response
      :response-destination (fn [ctx]) and
      :service-destination  (fn [ctx service stage type]) name destinations;
                        type is :commands or :events"
@@ -87,6 +89,13 @@
                 (reverse wrappers))]
     (chain ctx {:destination destination
                 :messages messages})))
+
+(defn on-store!
+  "Lets the transport take part in the transaction storing a command
+   response (:on-store of the transport feature)."
+  [ctx resp]
+  (when-let [on-store (:on-store (transport ctx))]
+    (on-store ctx resp)))
 
 (def ^:const default-max-message-size
   1048576)

@@ -8,4 +8,7 @@
 
 (deftest test-register
   (is (= {:view-store :postgres}
-         (view-store/register {}))))
+         (dissoc (view-store/register {}) :edd-core)))
+
+  (is (= [:edd/postgres-view-store]
+         (mapv :id (get-in (view-store/register {}) [:edd-core :migrations])))))

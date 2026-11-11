@@ -9,7 +9,7 @@
    [edd.el.event :as edd-events]
    [edd.memory.event-store :as memory]
    [edd.test.fixture.dal :as mock]
-   [lambda.core :as core]
+   [aws.lambda :as core]
    [lambda.runtime :as runtime]
    [edd.distribution :as distribution]
    [lambda.request :as request]
@@ -121,7 +121,7 @@
                                                         :name   "CMD3"}]}]))]
 
        :requests [{:post "https://sqs.eu-central-1.amazonaws.com/11111111111/test-evets-queue"}]
-       (core/start
+       (core/lambda-custom-runtime
         ctx
         edd/handler)
        (mock-client/verify-traffic-edn [{:method  :get
@@ -173,7 +173,7 @@
                                                             :cmd-id :cmd-1
                                                             :name   "CMD2"}]}]))]
        :requests [{:post "https://sqs.eu-central-1.amazonaws.com/11111111111/test-evets-queue"}]
-       (core/start
+       (core/lambda-custom-runtime
         ctx
         edd/handler)
        (mock-client/verify-traffic-edn [{:method  :get
@@ -234,7 +234,7 @@
                                                         :name   "CMD3"}]}]))]
 
        :requests [{:post "https://sqs.eu-central-1.amazonaws.com/11111111111/test-evets-queue"}]
-       (core/start
+       (core/lambda-custom-runtime
         ctx
         edd/handler)
        (is (= [{:method  :get
@@ -303,7 +303,7 @@
                                                         :name   "CMD3"}]}]))]
 
        :requests [{:post "https://sqs.eu-central-1.amazonaws.com/local/test-evets-queue"}]
-       (core/start
+       (core/lambda-custom-runtime
         ctx
         edd/handler)
        (is  (= [{:method  :get
@@ -369,7 +369,7 @@
                                                         :name   "CMD3"}]}]))]
 
        :requests [{:post "https://sqs.eu-central-1.amazonaws.com/local/test-evets-queue"}]
-       (core/start
+       (core/lambda-custom-runtime
         ctx
         edd/handler)
        (is  (= [{:method  :get
@@ -487,7 +487,7 @@
 
        :requests [{:post "https://sqs.eu-central-1.amazonaws.com/local/test-evets-queue"}]
 
-       (core/start
+       (core/lambda-custom-runtime
         ctx
         edd/handler)
 

@@ -10,8 +10,7 @@
 
 (deftest health-check-test
   (let [server
-        (sut/start (assoc (service/register mock/ctx)
-                          :edd/runtime sut/undertow-runtime)
+        (sut/start (service/register mock/ctx)
                    :port 0
                    :host "127.0.0.1"
                    :consume [])]

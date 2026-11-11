@@ -1,7 +1,5 @@
 (ns edd.test.fixture.execution
-  (:require [clojure.pprint :as pprint]
-            [edd.test.fixture.dal :as f]
-            [edd.el.event :as event]
+  (:require [edd.test.fixture.dal :as f]
             [edd.memory.event-store :as event-store]
             [clojure.tools.logging :as log]))
 
@@ -15,17 +13,7 @@
               str-n))))
 
 (defn process-cmd-response! [ctx cmd]
-  (log/info "apply-cmd" cmd)
-  (let [resp (f/handle-cmd (assoc ctx
-                                  :no-summary true)
-                           cmd)]
-    (log/debug "apply-cmd returned" (with-out-str (pprint/pprint resp)))
-    (tap> resp)
-    (doseq [id (distinct (map :id (:events resp)))]
-      (event/handle-event (assoc ctx
-                                 :apply {:aggregate-id id
-                                         :meta (:meta ctx)})))
-    resp))
+  (f/apply-cmd ctx cmd))
 
 (defn process-next!
   [ctx]

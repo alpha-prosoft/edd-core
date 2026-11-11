@@ -1,0 +1,6 @@
+{"name": "mono-svc",
+ "runtime": ["undertow"],
+ "distributor": "postgres",
+ "event-store": "postgres",
+ "view-store": "postgres",
+ "deploy": "none"}

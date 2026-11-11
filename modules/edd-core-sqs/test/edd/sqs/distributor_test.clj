@@ -5,7 +5,7 @@
             [edd.distribution.router]
             [edd.sqs.distributor :as sut]
             [edd.test.fixture.dal :as mock]
-            [lambda.core :as core]
+            [aws.lambda :as core]
             [lambda.request :as request]
             [lambda.test.fixture.client :as client]
             [lambda.test.fixture.core :refer [mock-core]]
@@ -132,7 +132,7 @@
                                                :messageId "m-1"
                                                :receiptHandle "r-1"
                                                :body (util/to-json cmd)}]})]
-       (core/start
+       (core/lambda-custom-runtime
         (sut/register (edd/reg-cmd mock/ctx :ping (fn [_ cmd] {:event-id :ping :id (:id cmd)})))
         edd/handler)
 

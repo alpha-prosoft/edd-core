@@ -7,12 +7,9 @@
    [clojure.java.io :as io]
    [clojure.tools.logging :as log]
    [lambda.logging]
-   [lambda.logging.state :as log-state]
    [lambda.util :as util]
    [lambda.uuid :as uuid]
-   [lambda.request :as request]
    [edd.core :as edd]
-   [edd.ctx :as edd-ctx]
    [lambda.runtime :as runtime]
    [edd.el.cmd :as el-cmd]
    [edd.memory.view-store :as memory-view-store]
@@ -95,17 +92,15 @@
       (binding [*dal-state* (atom {:realm :warmup
                                    :realms {:warmup {}}})
                 *queues* {:command-queue (atom [])
-                          :seed 0}
-                util/*cache* init-cache
-                request/*request* (atom {})
-                log-state/*invocation-start-ns* (System/nanoTime)]
-        (edd/with-stores ctx
-          #(el-cmd/handle-commands
-            %
-            {:request-id     (uuid/gen)
-             :interaction-id (uuid/gen)
-             :commands       [{:cmd-id :warmup-cmd
-                               :id     (uuid/gen)}]})))
+                          :seed 0}]
+        (runtime/with-invocation init-cache {}
+          (edd/with-stores ctx
+            #(el-cmd/handle-commands
+              %
+              {:request-id     (uuid/gen)
+               :interaction-id (uuid/gen)
+               :commands       [{:cmd-id :warmup-cmd
+                                 :id     (uuid/gen)}]}))))
       (log/info "SnapStart warm-up complete."))
     (catch Exception e
       (log/warn "SnapStart warm-up failed (non-fatal):" (ex-message e)))))
@@ -117,14 +112,10 @@
 (defn java-request-handler
   "Options: :filters, runtime filters (see lambda.runtime)."
   [init-ctx handler & {:as opts}]
-  ;; Features (edd/reg-feature) are compiled once here, mirroring
-  ;; lambda.core/start for the custom runtime.
   (let [init-ctx
-        (edd-ctx/init-features (lambda-ctx/init (runtime/init init-ctx handler opts)))]
+        (runtime/start init-ctx handler opts)]
     (fn [_this input output ^Context lambda-context]
-      (binding [util/*cache* init-cache
-                request/*request* (atom {})
-                log-state/*invocation-start-ns* (System/nanoTime)]
+      (runtime/with-invocation init-cache {}
         (let [ctx
               (assoc (lambda-ctx/init (assoc init-ctx
                                              :aws (cached-aws init-ctx)

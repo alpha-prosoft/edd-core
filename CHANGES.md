@@ -2,6 +2,27 @@
 
 ## Changes
 
+**[AP-1032]** Cleanup testing and scafolding
+- edd-core-distributor-postgres: transport for a single service on
+  the Postgres event store, effects and events are delivered to the
+  service itself from an outbox, no router and no queues
+- edd-core-flyway: components declare their migrations
+  (edd.ctx/put-migration), the feature runs them at startup for the
+  realms of :realms on ctx; the event store, view store and
+  distributor declare theirs
+- DANGER: applied migrations V010 (event store) and V003 (view store)
+  changed, existing databases need a flyway repair or baseline
+- lambda.core, :edd/runtime and edd.schema.swagger removed, a service
+  starts its runtimes itself; io.forward/yaml is no longer a
+  dependency
+- runtimes share lambda.runtime/start and with-invocation
+- edd.test.fixture.dal runs its requests on an in-memory runtime
+  through the dispatch of edd.core/handler, with-mock-dal takes :ctx
+- scaffold: --config applies a JSON project definition, --save-config
+  writes the one prompting produced; postgres distributor choice
+- local e2e adds mono-svc, scaffolded on the Postgres distributor
+- see MIGRATIONS.md
+
 **[AP-1021]** Add scaffold and move AWS out of core
 - edd-core-scaffold: one-line CLI that generates a working service
   (lambda/undertow, sqs/kafka, stores, optional ansible deploy),

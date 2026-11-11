@@ -228,6 +228,8 @@ MODULE_BUILD_ORDER=(
   edd-router
   edd-core-undertow
   edd-core-kafka
+  edd-core-flyway
+  edd-core-distributor-postgres
   # Tier 3: depend on other modules
   edd-core-client
   edd-core-import

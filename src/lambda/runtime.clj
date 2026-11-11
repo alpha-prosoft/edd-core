@@ -9,7 +9,11 @@
    response, or return a response without calling it. The first filter is
    the outermost."
   (:require [clojure.tools.logging :as log]
+            [edd.ctx :as edd-ctx]
             [edd.distribution :as distribution]
+            [lambda.ctx :as lambda-ctx]
+            [lambda.logging.state :as log-state]
+            [lambda.request :as request]
             [lambda.util :as util]))
 
 (set! *warn-on-reflection* true)
@@ -38,6 +42,24 @@
   (assoc ctx
          :handler handler
          :filters (vec (:filters (options opts)))))
+
+(defn start
+  "ctx every runtime starts from: handler and filters, the service
+   configuration and the initialized features."
+  [ctx handler opts]
+  (edd-ctx/init-features
+   (lambda-ctx/init
+    (init ctx handler opts))))
+
+(defmacro with-invocation
+  "Scope of one invocation: cache is what the runtime keeps between
+   invocations, request-state the initial lambda.request/*request* ({:scoped
+   true} caches deps and applies for the invocation)."
+  [cache request-state & body]
+  `(binding [util/*cache* ~cache
+             request/*request* (atom ~request-state)
+             log-state/*invocation-start-ns* (System/nanoTime)]
+     ~@body))
 
 (defn error-response
   [_ctx e]

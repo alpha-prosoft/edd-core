@@ -1,5 +1,6 @@
 (ns edd.scaffold-test
-  (:require [clojure.java.io :as io]
+  (:require [clojure.data.json]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [edd.scaffold :as sut])
@@ -106,7 +107,7 @@
      (str/includes? main "edd.java-lambda-runtime.core"))
 
     (is
-     (str/includes? main "edd.undertow.core/start"))
+     (str/includes? main "edd.undertow.core"))
 
     (is
      (contains? files "test/order_svc/main_test.clj"))
@@ -143,6 +144,47 @@
     (is
      (contains? (set (keys (:deps (read-string (slurp (io/file dir "deps.edn"))))))
                 'com.example/edd-core-kafka))))
+
+(deftest postgres-distributor-project-test
+  (let [{:keys [dir]}
+        (generate {:name "order-svc"
+                   :runtime ["undertow"]
+                   :distributor "postgres"
+                   :event-store "postgres"
+                   :view-store "postgres"})
+
+        service
+        (slurp (io/file dir "src/order_svc/service.clj"))]
+
+    (is
+     (str/includes? service "[edd.postgres.distributor :as distributor]"))
+
+    (is
+     (str/includes? service "(distributor/register (flyway/register named))"))
+
+    (is
+     (= #{'org.clojure/clojure
+          'com.example/edd-core
+          'com.example/edd-core-aws
+          'com.example/edd-core-client
+          'com.example/edd-core-security
+          'com.example/edd-core-undertow
+          'com.example/edd-core-distributor-postgres
+          'com.example/edd-core-flyway
+          'com.example/edd-core-view-store-postgres}
+        (set (keys (:deps (read-string (slurp (io/file dir "deps.edn"))))))))))
+
+(deftest postgres-distributor-questions-test
+  (with-out-str
+    (with-in-str "2\n3\n\n"
+      (is
+       (= {:runtime ["undertow"]
+           :distributor "postgres"
+           :event-store "postgres"
+           :view-store "s3"
+           :deploy "none"}
+          (select-keys (sut/resolve-options ["order-svc" "--version" "1.42"])
+                       [:runtime :distributor :event-store :view-store :deploy]))))))
 
 (deftest local-edd-core-root-test
   (let [{:keys [dir]}
@@ -206,6 +248,72 @@
           (select-keys (sut/resolve-options ["order-svc" "--version" "1.42"])
                        [:runtime :distributor :deploy]))))))
 
+(deftest definition-file-test
+  (let [dir
+        (temp-dir)
+
+        file
+        (str dir "/mono-svc.json")]
+    (spit file "{\"name\": \"mono-svc\",
+                 \"runtime\": [\"undertow\"],
+                 \"distributor\": \"postgres\",
+                 \"event-store\": \"postgres\",
+                 \"view-store\": \"postgres\",
+                 \"deploy\": \"none\"}")
+
+    (testing "a definition answers every question"
+      (is
+       (= {:name "mono-svc"
+           :runtime ["undertow"]
+           :distributor "postgres"
+           :event-store "postgres"
+           :view-store "postgres"
+           :deploy "none"}
+          (select-keys (sut/resolve-options ["--config" file "--version" "1.42"])
+                       [:name :runtime :distributor :event-store :view-store :deploy]))))
+
+    (testing "the command line wins"
+      (is
+       (= "memory"
+          (:view-store (sut/resolve-options ["--config" file "--version" "1.42"
+                                             "--view-store" "memory"])))))
+
+    (testing "unknown keys are rejected"
+      (spit file "{\"name\": \"mono-svc\", \"runtimes\": [\"undertow\"]}")
+
+      (is
+       (thrown-with-msg?
+        clojure.lang.ExceptionInfo
+        #"Unknown keys in .*: runtimes"
+        (sut/resolve-options ["--config" file "--version" "1.42"]))))))
+
+(deftest prompting-saves-the-definition-it-applies-test
+  (let [file
+        (str (temp-dir) "/order-svc.json")
+
+        target
+        (str (temp-dir) "/order-svc")]
+    (with-out-str
+      (with-in-str "2\n3\n\n"
+        (sut/-main "order-svc" "--version" "1.42" "--save-config" file)))
+
+    (is
+     (= {:name "order-svc"
+         :version "1.42"
+         :runtime ["undertow"]
+         :distributor "postgres"
+         :event-store "postgres"
+         :view-store "s3"
+         :deploy "none"}
+        (clojure.data.json/read-str (slurp file) :key-fn keyword)))
+
+    (with-out-str
+      (sut/-main "--config" file "--dir" target))
+
+    (is
+     (str/includes? (slurp (io/file target "src/order_svc/service.clj"))
+                    "[edd.postgres.distributor :as distributor]"))))
+
 (deftest validation-test
   (testing "postgres view store needs the postgres event store"
     (is
@@ -226,6 +334,30 @@
       (sut/resolve-options ["order-svc" "--version" "1.42"
                             "--runtime" "lambda"
                             "--distributor" "kafka"
+                            "--event-store" "memory"
+                            "--view-store" "memory"
+                            "--deploy" "none"]))))
+
+  (testing "postgres cannot feed lambda"
+    (is
+     (thrown-with-msg?
+      clojure.lang.ExceptionInfo
+      #"Distributor postgres does not work with runtime lambda"
+      (sut/resolve-options ["order-svc" "--version" "1.42"
+                            "--runtime" "lambda"
+                            "--distributor" "postgres"
+                            "--event-store" "postgres"
+                            "--view-store" "postgres"
+                            "--deploy" "none"]))))
+
+  (testing "postgres needs the postgres event store"
+    (is
+     (thrown-with-msg?
+      clojure.lang.ExceptionInfo
+      #"Event store memory does not work with distributor postgres"
+      (sut/resolve-options ["order-svc" "--version" "1.42"
+                            "--runtime" "undertow"
+                            "--distributor" "postgres"
                             "--event-store" "memory"
                             "--view-store" "memory"
                             "--deploy" "none"]))))

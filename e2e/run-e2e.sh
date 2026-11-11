@@ -226,7 +226,7 @@ INLINE_REQUEST_ID="$(uuid)"
      E2E_IMPORT_OBJECT_ID="${OBJ_ID}" \
      E2E_CACHED_REQUEST_ID="${CACHED_REQUEST_ID}" \
      E2E_INLINE_REQUEST_ID="${INLINE_REQUEST_ID}" \
-     clojure -M:it )
+     clojure -M:it --skip-meta :local )
 
 # 11. The response cache in S3: pong-svc (cache, 3 effects per part) stored its
 #     7 effect fan-out in 3 parts, the events with the first one; ping-svc (no

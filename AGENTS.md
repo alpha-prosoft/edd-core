@@ -237,7 +237,7 @@ touching individual registrations.
 ```
 
 **Key Points**:
-- `:init` runs once at startup (`lambda/start`) and automatically in
+- `:init` runs once at startup (the runtime's start) and automatically in
   `mock/with-mock-dal` — never inside `reg-feature` (registration order
   is arbitrary).
 - Filters wrap execution like servlet filters: the filter frame stays on
@@ -307,10 +307,9 @@ Or inline per registration (compiled into allow policies at init):
 
 ### 9. Runtimes and Filters
 
-`lambda.core/start` runs a handler on the runtime named by `:edd/runtime` or
-`-Dedd.runtime` (no default), e.g. `aws.lambda/lambda-custom-runtime` or
-`edd.undertow.core/start`; the handler is `edd.core/handler` or your own
-`(fn [ctx request] response)`.
+A service starts the runtimes it runs on itself, one or several:
+`edd.undertow.core/start`, `aws.lambda/lambda-custom-runtime`; the handler is
+`edd.core/handler` or your own `(fn [ctx request] response)`.
 `edd.java-lambda-runtime.core/start` is the Lambda Java runtime with SnapStart.
 The runtime decodes its input: HTTP requests (API Gateway, Undertow) go through
 `lambda.http` (authentication, `/health`, JSON response, 500 on errors), queue
@@ -324,7 +323,7 @@ records (SQS, Kafka) are one request each.
     (log/info "handled" (:request-id request))
     response))
 
-(lambda/start ctx edd/handler :filters [aws.filters/from-bucket audit-filter])
+(undertow/start ctx edd/handler :filters [aws.filters/from-bucket audit-filter])
 ```
 
 `:post-filter` and `{:cond :fn}` filters were removed and fail at startup.
@@ -338,7 +337,17 @@ request fails with `No distributor registered` (your own handler needs none):
 - `edd.sqs.distributor/register` (edd-core-sqs), `edd.kafka.distributor/register`
   (edd-core-kafka, Undertow only);
 - `edd.distribution.memory/register` in tests; `mock/ctx` has it, read router
-  messages with `(edd.distribution.memory/published ctx)`.
+  messages with `(edd.distribution.memory/published ctx)`;
+- `edd.postgres.distributor/register` (edd-core-distributor-postgres): a single service on the
+  Postgres event store, no router and no queues. Events and effects are
+  delivered to the service itself from an outbox in the same database (its
+  own schema per realm), Undertow only; an effect for another service fails
+  the command. Options: `:poll-interval-ms`, `:batch-size`, `:lease-seconds`,
+  `:max-attempts`; realms are `:realms` of ctx, `[:prod]` by default.
+
+A service owning its database registers `(edd.flyway/register ctx)`
+(edd-core-flyway): it runs the migrations the Postgres event store, view store
+and distributor declare (`edd.ctx/put-migration`) at startup, for every realm.
 
 The router service runs `edd.router.core/handler`; on Undertow it also calls
 `(edd.router.core/register ctx)` to consume the router destination.
@@ -361,7 +370,7 @@ feature HTTP requests are rejected.
 stores, deployment), see its README:
 
 ```bash
-clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.340.0"}}}' \
+clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.341.0"}}}' \
   -M -m edd.scaffold my-svc
 ```
 
@@ -447,7 +456,7 @@ clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.340
         notification/register))
 ```
 
-**Lambda Handler** (`src/myapp/core.clj`):
+**Entry point** (`src/myapp/core.clj`):
 ```clojure
 (ns myapp.core
   (:require [aws.cognito :as cognito]
@@ -456,11 +465,11 @@ clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.340
             [edd.dynamodb.event-store :as event-store]
             [edd.s3.view-store :as view-store]
             [edd.sqs.distributor :as distributor]
-            [lambda.core :as lambda]
+            [edd.undertow.core :as undertow]
             [myapp.module :as module]))
 
 (defn -main [& _args]
-  (lambda/start
+  (undertow/start
     (-> {}
         (assoc :service-name :myapp-svc)
         (distributor/register)
@@ -586,7 +595,8 @@ clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.340
    :deps [{:service :remote-svc                           ;; Mock remote queries
            :query {...}
            :resp {...}}]
-   :responses [{:post "http://..." :body "{...}"}]}      ;; Mock HTTP
+   :responses [{:post "http://..." :body "{...}"}]       ;; Mock HTTP
+   :ctx (my/register mock/ctx)}                           ;; Optional: ctx of the stores and runtime
   
   ;; Test body
   ...)

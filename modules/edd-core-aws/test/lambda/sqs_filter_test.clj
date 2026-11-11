@@ -5,7 +5,7 @@
             [edd.core :as edd]
             [edd.el.cmd :as el-cmd]
             [lambda.uuid :as uuid]
-            [lambda.core :as core]
+            [aws.lambda :as core]
             [lambda.test.fixture.core :refer [mock-core]]
             [lambda.test.fixture.client :refer [verify-traffic-edn]]
             [clojure.test :refer [deftest testing is]]
@@ -86,7 +86,7 @@
        :requests [{:get  (str "https://s3-bucket.s3.eu-central-1.amazonaws.com/"
                               key)
                    :body (char-array "Of something")}]
-       (core/start
+       (core/lambda-custom-runtime
         (memory-distribution/register {})
         (fn [_ctx body]
           (log/info "Slurp content of S3 request into response")

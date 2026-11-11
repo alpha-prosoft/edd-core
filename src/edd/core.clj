@@ -370,6 +370,8 @@
       (catch Exception e
         (do
           (log/error e)
+          (when (:keep-throwable @request/*request*)
+            (swap! request/*request* assoc :throwable e))
           (let [data (ex-data e)]
             (cond
               (:error data) {:exception      (:error data)

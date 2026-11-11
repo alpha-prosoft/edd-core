@@ -11,8 +11,6 @@
             [lambda.uuid :as uuid]
             [aws.ctx :as aws-ctx]
             [lambda.logging]
-            [lambda.logging.state :as log-state]
-            [edd.ctx :as edd-ctx]
             [lambda.runtime :as runtime]))
 
 (set! *warn-on-reflection* true)
@@ -57,10 +55,7 @@
 
 (defn init
   [init-ctx handler opts]
-  (edd-ctx/init-features
-   (aws-ctx/init
-    (lambda-ctx/init
-     (runtime/init init-ctx handler opts)))))
+  (runtime/start (aws-ctx/init (lambda-ctx/init init-ctx)) handler opts))
 
 (defn- store-trace-headers!
   [invocation]
@@ -95,8 +90,7 @@
                                            (uuid/parse invocation-id)))]
            (util/d-time
             (str "Handling next request: " i ", invocation-id: " invocation-id)
-            (binding [request/*request* (atom {:scoped true})
-                      log-state/*invocation-start-ns* (System/nanoTime)]
+            (runtime/with-invocation util/*cache* {:scoped true}
               (store-trace-headers! invocation)
               (let [{:keys [response error?]}
                     (handle-event invocation-ctx (:body invocation))]

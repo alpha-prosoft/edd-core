@@ -24,21 +24,6 @@
       real-val
       (get env e def))))
 
-(def lambda-runtime
-  "aws.lambda/lambda-custom-runtime")
-
-(defn with-lambda-runtime
-  [f]
-  (let [previous
-        (System/getProperty "edd.runtime")]
-    (System/setProperty "edd.runtime" lambda-runtime)
-    (try
-      (f)
-      (finally
-        (if previous
-          (System/setProperty "edd.runtime" previous)
-          (System/clearProperty "edd.runtime"))))))
-
 (defmacro mock-core
   [& args]
   (let [pairs (take-while #(keyword? (first %)) (partition 2 args))
@@ -59,9 +44,8 @@
                      core/get-loop (fn [] (range 0 (count ~invocations)))
                      util/get-env (partial get-env-mock ~env)
                      util/get-current-time-ms (fn [] 1587403965)]
-         (with-lambda-runtime
-           #(client/mock-http
-             responses#
-             ~@body))))))
+         (client/mock-http
+          responses#
+          ~@body)))))
 
 

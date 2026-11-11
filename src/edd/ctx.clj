@@ -75,6 +75,27 @@
           ctx
           (keep :invocation-ctx (get-features ctx))))
 
+(defn get-migrations
+  [ctx]
+  (get-in ctx [:edd-core :migrations] []))
+
+(defn put-migration
+  "Declares database migrations a component needs: {:id, :location of the
+   SQL on the classpath, :schema (fn [ctx realm]) they belong to, optional
+   :placeholders}. A migration runner (edd-core-flyway) applies the declared
+   sets at startup; registering a component twice declares it once."
+  [ctx {:keys [id] :as migration}]
+  (let [others
+        (remove #(= id (:id %)) (get-migrations ctx))]
+    (assoc-in ctx [:edd-core :migrations] (conj (vec others) migration))))
+
+(defn realms
+  "Realms the service serves: :realms of ctx, [:prod] when there is none."
+  [ctx]
+  (if (seq (:realms ctx))
+    (mapv keyword (:realms ctx))
+    [:prod]))
+
 (defn put-deps-resolver
   [ctx config]
   (assoc-in ctx [:edd-core :deps-resolver] config))

@@ -20,5 +20,5 @@ flyway -password="${DatabasePassword}" \
 flyway -X -password="${DatabasePassword}" \
            -schemas=prod \
            -url=jdbc:postgresql://${DatabaseEndpoint}:5432/postgres?user=postgres \
-            -locations="filesystem:${PWD}/modules/edd-core-view-store-postgres/migrations" \
+            -locations="filesystem:${PWD}/modules/edd-core-view-store-postgres/resources/edd/view_store/postgres/migrations" \
            migrate 

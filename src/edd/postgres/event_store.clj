@@ -8,7 +8,9 @@
             [lambda.util :as util]
             [clojure.string :as string]
             [edd.postgres.history :as history]
+            [edd.distribution :as distribution]
             [edd.core :as edd]
+            [edd.ctx :as edd-ctx]
             [edd.postgres.pool :as pool :refer [*DB*]]
             [malli.core :as m]
             [malli.error :as me]
@@ -424,7 +426,8 @@
    (store-history ctx resp)
    (doseq [i (:identities resp)]
      (store-identity ctx i))
-   (store-effects ctx resp))
+   (store-effects ctx resp)
+   (distribution/on-store! ctx resp))
   ctx)
 
 (defmethod store-results
@@ -451,11 +454,18 @@
    [:map
     [:service-name keyword?]]))
 
+(def migration
+  {:id :edd/postgres-event-store
+   :location "classpath:files/edd"
+   :schema (fn [_ctx realm]
+             (name realm))})
+
 (defn register
   [ctx]
   (let [ctx (-> ctx
                 (lambda-ctx/init)
-                (assoc :edd-event-store :postgres))]
+                (assoc :edd-event-store :postgres)
+                (edd-ctx/put-migration migration))]
     (log/info "Registering postgres event store"
               {:service-name (:service-name ctx)})
     (when-not (m/validate PostgresEventStoreCtx ctx)

@@ -33,11 +33,65 @@ Runtimes no longer check it at startup, so own handlers run without one.
   features can wrap publishing with `:publish-filter (fn [ctx {:keys [destination messages]} chain])`.
 - `edd.router.util` / `edd.router.s3-handler` are gone (fan-out is `edd.distribution.router`).
 - Tests: `mock/ctx` registers the in-memory transport (destinations `router`, `<svc>.<stage>.commands`);
-  a hand-built ctx passed to `lambda.core/start` needs `(edd.distribution.memory/register ctx)`. Read
+  a hand-built ctx passed to a runtime needs `(edd.distribution.memory/register ctx)`. Read
   router messages with `(edd.distribution.memory/published ctx)` instead of redefining `sqs/sqs-publish`.
 - Tests of the request path no longer need the Lambda fixture (`lambda.test.fixture.core/mock-core`, now in
   edd-core-aws): `edd.test.fixture.runtime` runs API requests and queue records on the in-memory runtime
   `lambda.runtime.memory`, see README "Testing".
+
+## Test fixtures run on the runtime
+
+`mock/handle-cmd`, `mock/apply-cmd`, `mock/apply-events` and `mock/query` keep their arguments and
+results but send their request through the dispatch of `edd.core/handler`, on an in-memory runtime
+`with-mock-dal` starts. Request ids stay optional and exceptions are still thrown. What differs:
+
+- a query result that is a map with an `:error` key comes back as `{:error ..}` only;
+- a command with more than 25 breadcrumbs returns `{:error :loop-detected}`;
+- `(mock/with-mock-dal {:ctx (my/register mock/ctx) ..} ..)` starts the stores and the runtime from that
+  ctx instead of `mock/ctx`.
+
+Runtimes share `lambda.runtime/start` (ctx with handler, filters, configuration and initialized
+features) and `lambda.runtime/with-invocation` (the scope of one invocation); a custom runtime uses
+them instead of calling `lambda.runtime/init` and `edd.ctx/init-features` itself.
+
+`io.forward/yaml` is no longer a dependency of edd-core; a service using `yaml.core` declares it.
+
+## DANGER: two applied SQL migrations changed
+
+Two migration files that are already applied in existing databases were edited, so their Flyway
+checksums no longer match. A validated `flyway migrate` fails on those databases with a checksum
+mismatch until they are repaired (`flyway repair`) or baselined. Nothing has to be re-applied, the
+resulting schema is the same.
+
+- Event store `sql/files/edd/V010__Indices.sql`: used the schema `test` by name, now
+  `${flyway:defaultSchema}`. It failed in every database without a `test` schema.
+- View store `V003__Prewarm_Aggregate_Indexes.sql`: required `pg_cron` and `pg_prewarm`, now schedules
+  the prewarm only where both are available and is a no-op elsewhere (plain Postgres).
+
+The view store migrations moved inside the module, from `modules/edd-core-view-store-postgres/migrations`
+to `modules/edd-core-view-store-postgres/resources/edd/view_store/postgres/migrations`, so they ship in
+its jar; deployments reading the old folder need the new path (the module's Ansible role is updated).
+The event store migrations stay in `sql/files/edd` and are on the classpath of edd-core as `files/edd`.
+
+## Migrations at startup
+
+Components declare the migrations they need with `edd.ctx/put-migration`: the Postgres event store,
+the Postgres view store and the Postgres distributor do. A service that owns its database registers
+`(edd.flyway/register ctx)` (module `edd-core-flyway`), which runs every declared set with Flyway when
+the runtime starts, for every realm of `:realms` on ctx (`[:prod]` when there is none). Services whose
+database is migrated by their deployment do not register it and nothing changes for them.
+
+## Postgres distributor
+
+New transport for a single service on the Postgres event store, without router and queues: module
+`edd-core-distributor-postgres`, `(edd.postgres.distributor/register ctx)`, Undertow only. Its outbox
+is a schema of its own per realm, `<realm>_distributor`; the migration is declared like the others, so
+`edd.flyway/register` creates it at startup. It polls the realms of `:realms` on ctx. Markers that
+failed `:max-attempts` times keep `failed_at` and `last_error`; clear `failed_at` to have them
+delivered again.
+
+Transports may take part in the transaction storing a command response: `:on-store (fn [ctx resp])` of
+`edd.distribution/register-transport`, called by the Postgres event store.
 
 ## Repeated requests are marked
 
@@ -80,16 +134,18 @@ Add `com.alpha-prosoft/edd-core-aws`; namespaces keep their names:
   `from-bucket` and `parse-key` moved to `aws.filters`.
 - `edd.core/fetch-from-s3` is gone; transports resolve big bodies themselves (`:unwrap`).
 - `AWS_LAMBDA_DISABLE_METRICS` still works, `DisableMetrics` is the neutral name.
-- `lambda.core/start` has no default runtime: set `:edd/runtime` or `-Dedd.runtime`, e.g.
-  `aws.lambda/lambda-custom-runtime`, or call the runtime's start directly.
+- `lambda.core/start`, `:edd/runtime` and `-Dedd.runtime` are gone: a service calls the start of the
+  runtimes it runs on, e.g. `(edd.undertow.core/start ctx edd.core/handler)` or
+  `(aws.lambda/lambda-custom-runtime ctx edd.core/handler)`.
+- `edd.schema.swagger` is gone, and with it schema generation by running the service main with
+  `-Dedd.runtime=edd.schema.swagger/swagger-runtime`; image builds doing that produce no `schema.json`.
 - AWS configuration and credentials are a feature, `aws.ctx/register`, which the AWS registrations
   (stores, SQS distributor, Cognito, S3 caches) bring along; it resolves them at startup and keeps
   temporary credentials fresh on Undertow. A service using AWS only through its own code registers it
   itself. Undertow no longer looks for edd-core-aws on the classpath.
 - `aws.aws/get-token`, `get-token-from-cache`, `admin-auth` and `get-or-set` are gone, the service
   token comes from `aws.cognito/credentials`. The `edd-core-dev` module is removed.
-- `lambda.core/start` no longer initializes features. A custom runtime builds its ctx with
-  `lambda.runtime/init` and then calls `edd.ctx/init-features` itself, as the bundled runtimes do.
+- A custom runtime builds its ctx with `lambda.runtime/start`, as the bundled runtimes do.
 
 ## Runtime filters
 

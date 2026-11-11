@@ -1,5 +1,6 @@
 (ns edd.scaffold
-  (:require [clojure.edn :as edn]
+  (:require [clojure.data.json :as json]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str])
   (:import [java.io File]
@@ -22,13 +23,15 @@
 (def event-stores
   [{:id "dynamodb"
     :description "DynamoDB"
-    :ns "edd.dynamodb.event-store"}
+    :ns "edd.dynamodb.event-store"
+    :forbids-distributor "postgres"}
    {:id "postgres"
     :description "PostgreSQL"
     :ns "edd.postgres.event-store"}
    {:id "memory"
     :description "In-memory (tests and local experiments)"
-    :ns "edd.memory.event-store"}])
+    :ns "edd.memory.event-store"
+    :forbids-distributor "postgres"}])
 
 (def view-stores
   [{:id "s3"
@@ -56,6 +59,11 @@
     :description "Apache Kafka (Undertow only)"
     :ns "edd.kafka.distributor"
     :libs ["edd-core-kafka"]
+    :forbids-runtime "lambda"}
+   {:id "postgres"
+    :description "Postgres outbox: one service, no router (Undertow and postgres event store only)"
+    :ns "edd.postgres.distributor"
+    :libs ["edd-core-distributor-postgres" "edd-core-flyway"]
     :forbids-runtime "lambda"}])
 
 (def deploys
@@ -73,18 +81,24 @@
 
 (def usage
   "Usage: clojure -M -m edd.scaffold <project-name> [options]
+       clojure -M -m edd.scaffold --config <file> [options]
 
 Options:
   --runtime <ids>        lambda, undertow or both: lambda,undertow
   --event-store <id>     dynamodb, postgres or memory
   --view-store <id>      s3, postgres, elastic or memory
-  --distributor <id>     sqs or kafka (kafka needs the undertow runtime)
+  --distributor <id>     sqs, kafka or postgres (kafka and postgres need
+                         the undertow runtime, postgres the postgres event store)
   --deploy <id>          ansible (lambda only) or none
   --dir <path>           target directory (default: ./<project-name>)
   --version <version>    edd-core version for generated deps
   --group-id <group>     maven group of edd-core libs
   --edd-core-root <path> use a local edd-core checkout instead of maven
   --force                write into a non-empty directory
+  --config <file>        project definition (JSON) with the options above as keys,
+                         e.g. {\"name\": \"my-svc\", \"runtime\": [\"undertow\"]};
+                         options on the command line win
+  --save-config <file>   write the project definition instead of generating
 
 Missing options are asked interactively.")
 
@@ -116,6 +130,40 @@ Missing options are asked interactively.")
 
       :else
       (recur more (assoc parsed :name arg)))))
+
+(def definition-keys
+  [:name :runtime :distributor :event-store :view-store :deploy
+   :dir :version :group-id :edd-core-root :force])
+
+(defn- read-definition
+  [path]
+  (let [definition
+        (json/read-str (slurp path) :key-fn keyword)
+
+        unknown
+        (remove (set definition-keys) (keys definition))]
+    (when (seq unknown)
+      (throw (ex-info (str "Unknown keys in " path ": " (str/join ", " (map name unknown))) {})))
+    (cond-> definition
+      (sequential? (:runtime definition)) (update :runtime #(str/join "," %)))))
+
+(defn- with-definition
+  "Options of the --config definition, overridden by the command line."
+  [{:keys [config] :as parsed}]
+  (if config
+    (merge (read-definition config) (dissoc parsed :config))
+    parsed))
+
+(defn definition
+  "What a --config file holds: the choices of resolved and the options
+   given for it, so applying it asks nothing."
+  [given resolved]
+  (merge (select-keys given definition-keys)
+         (select-keys resolved [:name :runtime :distributor :event-store :view-store :deploy])))
+
+(defn- save-definition!
+  [path saved]
+  (spit path (with-out-str (json/pprint saved))))
 
 (defn- split-ids
   [value]
@@ -154,19 +202,22 @@ Missing options are asked interactively.")
       resolved)))
 
 (defn- allowed?
-  [{:keys [runtime event-store]} {:keys [requires-runtime forbids-runtime requires-event-store]}]
+  [{:keys [runtime event-store distributor]}
+   {:keys [requires-runtime forbids-runtime requires-event-store forbids-distributor]}]
   (let [runtime-ids
         (set runtime)]
     (and (or (nil? requires-runtime) (contains? runtime-ids requires-runtime))
          (not (contains? runtime-ids forbids-runtime))
-         (or (nil? requires-event-store) (= requires-event-store event-store)))))
+         (or (nil? requires-event-store) (= requires-event-store event-store))
+         (or (nil? forbids-distributor) (not= forbids-distributor distributor)))))
 
 (defn- restriction
-  [{:keys [requires-runtime forbids-runtime requires-event-store]}]
+  [{:keys [requires-runtime forbids-runtime requires-event-store forbids-distributor]}]
   (cond
     requires-runtime (str "requires runtime " requires-runtime)
     forbids-runtime (str "does not work with runtime " forbids-runtime)
-    requires-event-store (str "requires event store " requires-event-store)))
+    requires-event-store (str "requires event store " requires-event-store)
+    forbids-distributor (str "does not work with distributor " forbids-distributor)))
 
 (defn- choice-errors
   [opts label options selected]
@@ -311,15 +362,29 @@ Missing options are asked interactively.")
    "edd.memory.view-store" (:ns (by-id view-stores view-store))
    "edd.sqs.distributor" (:ns (by-id distributors distributor))})
 
+(def ^:private startup-migrations
+  "A service on the postgres distributor owns its database: it migrates
+   it with edd-core-flyway when it starts."
+  {"[edd.postgres.distributor :as distributor]"
+   "[edd.postgres.distributor :as distributor]\n            [edd.flyway :as flyway]"
+
+   "(distributor/register named)"
+   "(distributor/register (flyway/register named))"})
+
 (defn- render-text
-  [{:keys [name] :as opts} path content]
+  [{:keys [name distributor] :as opts} path content]
   (let [with-namespaces
         (reduce-kv str/replace content (namespace-replacements opts))
 
+        with-migrations
+        (if (= "postgres" distributor)
+          (reduce-kv str/replace with-namespaces startup-migrations)
+          with-namespaces)
+
         with-deps
         (if (= path "deps.edn")
-          (str/replace with-namespaces ":deps {}" (render-deps opts))
-          with-namespaces)]
+          (str/replace with-migrations ":deps {}" (render-deps opts))
+          with-migrations)]
     (str/replace with-deps placeholder name)))
 
 (defn- target-path
@@ -387,7 +452,7 @@ Missing options are asked interactively.")
 (defn resolve-options
   [args]
   (let [{:keys [runtime event-store view-store distributor deploy] :as parsed}
-        (parse-args args)
+        (with-definition (parse-args args))
 
         info
         (build-info)
@@ -426,22 +491,34 @@ Missing options are asked interactively.")
       (throw (ex-info "Unknown edd-core version; pass --version or --edd-core-root" {})))
     (validate! with-deploy)))
 
+(defn- generate-and-report!
+  [resolved]
+  (let [files
+        (generate! resolved)
+
+        target
+        (or (:dir resolved) (:name resolved))]
+    (println)
+    (println "Created" target "with" (count files) "files:"
+             (select-keys resolved [:runtime :distributor :event-store :view-store :deploy]))
+    (println "Next: cd" target "&& clojure -M:test:unit")))
+
 (defn -main
   [& args]
   (try
-    (let [{:keys [help name]}
-          (parse-args args)]
-      (if (or help (nil? name))
+    (let [{:keys [help name save-config] :as given}
+          (with-definition (parse-args args))]
+      (cond
+        (or help (nil? name))
         (println usage)
-        (let [resolved
-              (resolve-options args)
 
-              files
-              (generate! resolved)]
-          (println)
-          (println "Created" (or (:dir resolved) name) "with" (count files) "files:"
-                   (select-keys resolved [:runtime :distributor :event-store :view-store :deploy]))
-          (println "Next: cd" (or (:dir resolved) name) "&& clojure -M:test:unit"))))
+        save-config
+        (do
+          (save-definition! save-config (definition (dissoc given :save-config) (resolve-options args)))
+          (println "Saved" save-config))
+
+        :else
+        (generate-and-report! (resolve-options args))))
     (catch clojure.lang.ExceptionInfo e
       (binding [*out* *err*]
         (println (ex-message e)))

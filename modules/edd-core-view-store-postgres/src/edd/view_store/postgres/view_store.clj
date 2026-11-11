@@ -21,7 +21,9 @@
    (-> ctx (postgres-view-store/register))"
 
   (:require
+   [clojure.string :as string]
    [clojure.tools.logging :as log]
+   [edd.ctx :as edd-ctx]
    [edd.postgres.history :as es-history]
    [edd.postgres.pool :as pool :refer [*DB*]]
    [edd.search :refer [with-init
@@ -178,6 +180,13 @@
      ;; Returns the aggregate directly (no wrapper map) due to AggregateBuilder
      (vs-history/get-by-id-and-version *DB* realm service id version))))
 
+(def migration
+  {:id :edd/postgres-view-store
+   :location "classpath:edd/view_store/postgres/migrations"
+   :placeholders {"historyPartitionCount" "1"}
+   :schema (fn [ctx realm]
+             (string/replace (str (name realm) "-" (name (:service-name ctx))) "-" "_"))})
+
 (defn register
   [ctx]
-  (assoc ctx :view-store :postgres))
+  (edd-ctx/put-migration (assoc ctx :view-store :postgres) migration))

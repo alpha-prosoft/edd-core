@@ -132,6 +132,22 @@ services:
     networks:
       - opensearch-net
 
+  # One service on the Postgres distributor: no router, no Kafka.
+  mono-svc:
+    profiles: [e2e]
+    image: ${DOCKER_URL:-}eclipse-temurin:25.0.4.1_1-jre-alpine
+    command: java -cp /app/mono-svc.jar clojure.main -m mono-svc.main
+    environment:
+      <<: *e2e-env
+      ServiceName: mono-svc
+      ResourceName: mono-svc
+      CustomConfig: '{"realms": [":test"]}'
+    volumes:
+      - ./e2e/target/local:/app:ro
+    depends_on: [postgres]
+    networks:
+      - opensearch-net
+
   router-svc:
     profiles: [e2e]
     image: ${DOCKER_URL:-}eclipse-temurin:25.0.4.1_1-jre-alpine
@@ -153,7 +169,7 @@ services:
       - 8085:80
     volumes:
       - ./e2e/local/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on: [ping-svc, pong-svc]
+    depends_on: [ping-svc, pong-svc, mono-svc]
     networks:
       - opensearch-net
 

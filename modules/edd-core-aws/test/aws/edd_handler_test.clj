@@ -9,7 +9,7 @@
             [edd.el.query :as query]
             [edd.test.fixture.dal :as mock]
             [lambda.api-test :as api :refer [api-request]]
-            [lambda.core :as core]
+            [aws.lambda :as core]
             [lambda.jwt :as jwt]
             [lambda.s3-test :as s3]
             [lambda.test.fixture.client :refer [verify-traffic-edn]]
@@ -72,7 +72,7 @@
        :requests [{:get  (str "https://example-bucket.s3.eu-central-1.amazonaws.com/"
                               key)
                    :body (char-array "Of something")}]
-       (core/start
+       (core/lambda-custom-runtime
         (cognito/register (prepare))
         edd/handler
         :filters [aws-filters/from-bucket])
@@ -118,7 +118,7 @@
 
          :requests [{:get  "https://example-bucket.s3.eu-central-1.amazonaws.com/test/key"
                      :body (char-array "Of something")}]
-         (core/start
+         (core/lambda-custom-runtime
           (cognito/register (prepare))
           edd/handler)
          (verify-distributed-response)
@@ -178,7 +178,7 @@
                                                 (:meta ctx))))]
         (mock-core
          :invocations [(api-request cmd)]
-         (core/start
+         (core/lambda-custom-runtime
           (cognito/register mock/ctx)
           edd/handler)
          (log/info "Nothing nere to check"))))))
@@ -212,7 +212,7 @@
                                                 (:meta ctx))))]
         (mock-core
          :invocations [(api-request cmd)]
-         (core/start
+         (core/lambda-custom-runtime
           (cognito/register mock/ctx)
           edd/handler)
          (log/info "Nothing nere to check"))))))

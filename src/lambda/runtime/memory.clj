@@ -3,24 +3,20 @@
    the handle-* fns run one invocation each in its own request scope, without
    a server or a queue: an HTTP request in the lambda.http shape, a batch of
    queue records or a plain request."
-  (:require [edd.ctx :as edd-ctx]
-            [lambda.ctx :as lambda-ctx]
-            [lambda.http :as http]
-            [lambda.request :as request]
+  (:require [lambda.http :as http]
             [lambda.runtime :as runtime]
+            [lambda.util :as util]
             [lambda.uuid :as uuid]))
 
 (defn start
   "Returns the runtime ctx the handle-* fns take. Options: :filters, runtime
    filters (see lambda.runtime)."
   [init-ctx handler & {:as opts}]
-  (edd-ctx/init-features
-   (lambda-ctx/init
-    (runtime/init init-ctx handler opts))))
+  (runtime/start init-ctx handler opts))
 
 (defn- invoke
   [ctx f]
-  (binding [request/*request* (atom {:scoped true})]
+  (runtime/with-invocation util/*cache* {:scoped true}
     (f (update ctx :invocation-id #(or % (uuid/gen))))))
 
 (defn handle-http

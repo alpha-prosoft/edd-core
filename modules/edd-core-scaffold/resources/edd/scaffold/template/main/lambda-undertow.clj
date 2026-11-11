@@ -1,21 +1,19 @@
 (ns projectname.main
   (:gen-class)
   (:require [edd.core :as edd]
-            [edd.java-lambda-runtime.core :as runtime]
-            [lambda.core :as lambda]
+            [edd.java-lambda-runtime.core :as lambda]
+            [edd.undertow.core :as undertow]
             [projectname.filters :as filters]
             [projectname.service :as service]))
 
-(def undertow-runtime "edd.undertow.core/start")
-
-(runtime/start
+(lambda/start
  (service/init {})
  edd/handler
  :filters filters/filters)
 
 (defn start
   [ctx & opts]
-  (apply lambda/start
+  (apply undertow/start
          ctx
          edd/handler
          :filters filters/filters
@@ -23,6 +21,4 @@
 
 (defn -main
   [& _args]
-  (start
-   (assoc (service/init {})
-          :edd/runtime (System/getProperty "edd.runtime" undertow-runtime))))
+  (start (service/init {})))

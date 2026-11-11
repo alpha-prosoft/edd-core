@@ -4,6 +4,11 @@
 ;; All stores are partitioned by realm (from ctx [:meta :realm], defaults to :test).
 ;; Helper functions provide normalized views with infrastructure metadata removed.
 ;;
+;; with-mock-dal starts an in-memory runtime (lambda.runtime.memory), from
+;; mock/ctx or the :ctx of its state map. handle-cmd, apply-cmd and query run
+;; their request through it with the ctx they are given, on the same dispatch
+;; as edd.core/handler.
+;;
 ;; Example:
 ;;
 ;; (with-mock-dal
@@ -20,7 +25,6 @@
             [clojure.data :refer [diff]]
             [edd.distribution.memory :as memory-distribution]
             [clojure.tools.logging :as log]
-            [edd.el.event :as event]
             [clojure.test :refer [is]]
             [edd.el.cmd :as cmd]
             [edd.core :as edd]
@@ -34,7 +38,9 @@
             [lambda.request :as request]
             [edd.el.query :as query]
             [edd.ctx :as edd-ctx]
-            [lambda.ctx :as lambda-ctx]))
+            [lambda.ctx :as lambda-ctx]
+            [lambda.runtime :as runtime]
+            [lambda.runtime.memory :as memory-runtime]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Data Access Layer ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -180,6 +186,26 @@
   (strip-annotations (real-handle-query ctx body)
                      (get @*dal-state* :keep-meta false)))
 
+(def ^:private store-keys
+  #{:event-store :identity-store :command-store :aggregate-store :aggregate-history
+    :response-log :command-log :request-error-log})
+
+(defn- normalized-store
+  [state store-key]
+  (let [realm (get state :realm :test)
+        data (get-in state [:realms realm store-key] [])
+        keep-meta (get state :keep-meta false)
+        normalize #(normalize-item % keep-meta)]
+    (cond
+      (and (= store-key :event-store) (not keep-meta))
+      (mapv normalize-event (sort-by :event-seq data))
+
+      (= store-key :event-store)
+      (mapv normalize (sort-by :event-seq data))
+
+      :else
+      (mapv normalize data))))
+
 (defn dal-state-accessor
   "Returns realm-scoped store data with normalization for test assertions.
 
@@ -191,25 +217,8 @@
    For event-store when keep-meta is true: keeps everything raw.
    Sorts event-store by event-seq."
   [state key]
-  (if (#{:event-store :identity-store :command-store :aggregate-store :aggregate-history
-         :response-log :command-log :request-error-log} key)
-    (let [realm (get state :realm :test)
-          data (get-in state [:realms realm key] [])
-          keep-meta (get state :keep-meta false)
-          normalize #(normalize-item % keep-meta)]
-      (cond
-        ;; Event store with default normalization:
-        ;; strip infra keys + realm from meta, keep domain meta
-        (and (= key :event-store) (not keep-meta))
-        (mapv normalize-event (sort-by :event-seq data))
-
-        ;; Event store with keep-meta: use normalize-item
-        ;; which respects keep-meta true/vector semantics
-        (= key :event-store)
-        (mapv normalize (sort-by :event-seq data))
-
-        :else
-        (mapv normalize data)))
+  (if (store-keys key)
+    (normalized-store state key)
     (get state key)))
 
 (defn create-identity
@@ -288,18 +297,33 @@
     (assoc clean-base-state
            :realms {realm merged-realm-stores})))
 
+(def ^:dynamic *runtime*
+  "The runtime with-mock-dal started."
+  nil)
+
+(defn- dispatch
+  "Handler of the mock runtime: the dispatch of edd.core/handler without
+   its request validation, so requests may come without ids."
+  [ctx request]
+  (first (:resp (edd/dispatch-request (assoc ctx :body [request])))))
+
+(defn start-runtime
+  [ctx]
+  (memory-runtime/start ctx dispatch))
+
 (defmacro with-mock-dal [& body]
   `(edd/with-stores
-     ctx
+     ~(or (when (map? (first body)) (:ctx (first body))) `ctx)
      #(let [base-state# (merge
                          {:realm :test}  ; Default realm for tests
                          (util/fix-keys
                           ~(if (map? (first body))
                              (merge
                               default-db
-                              (dissoc (first body) :seed))
+                              (dissoc (first body) :seed :ctx))
                              default-db)))]
-        (binding [*dal-state* (atom (create-realm-partitioned-state base-state# (lambda-ctx/get-service-name ctx)))
+        (binding [*runtime* (start-runtime %)
+                  *dal-state* (atom (create-realm-partitioned-state base-state# (lambda-ctx/get-service-name %)))
                   *queues* {:command-queue (atom [])
                             :seed          ~(if (and (map? (first body)) (:seed (first body)))
                                               (:seed (first body))
@@ -352,21 +376,9 @@
    See normalize-item for :keep-meta semantics."
   [store-key]
   (let [state @*dal-state*
-        realm (get state :realm :test)
-        keep-meta (get state :keep-meta false)
-        data (get-in state [:realms realm store-key] [])
-        normalize #(normalize-item % keep-meta)
-        normalized (cond
-                     (and (= store-key :event-store) (not keep-meta))
-                     (mapv normalize-event (sort-by :event-seq data))
-
-                     (= store-key :event-store)
-                     (mapv normalize (sort-by :event-seq data))
-
-                     :else
-                     (mapv normalize data))]
+        normalized (normalized-store state store-key)]
     (swap! *dal-state*
-           #(assoc-in % [:realms realm store-key] []))
+           #(assoc-in % [:realms (get state :realm :test) store-key] []))
     normalized))
 
 (defn peek-state
@@ -390,6 +402,46 @@
   [cmd]
   (util/fix-keys cmd))
 
+(defn- run-request
+  "Response of the request on the mock runtime, handled with ctx; ids
+   default to those of ctx. Throws what the handler threw."
+  [ctx request]
+  (swap! request/*request* #(assoc (dissoc % :throwable) :keep-throwable true))
+  (let [runtime-ctx
+        (merge (edd-ctx/init-features ctx)
+               (select-keys (or *runtime* (start-runtime ctx)) [:handler :filters]))
+
+        ids
+        (into {} (filter val (select-keys ctx [:request-id :interaction-id])))
+
+        response
+        (runtime/handle runtime-ctx (merge ids request))]
+    (when (contains? response :exception)
+      (throw (or (:throwable @request/*request*)
+                 (ex-info "Request failed" {:error (:exception response)}))))
+    response))
+
+(defn- other-service?
+  [ctx {:keys [service] :as cmd}]
+  (and (contains? cmd :commands)
+       (some? service)
+       (not= (:service-name ctx) service)))
+
+(defn- commands-request
+  [cmd]
+  (if (contains? cmd :commands)
+    (re-parse cmd)
+    (merge (into {} (filter val (select-keys cmd [:request-id :interaction-id])))
+           {:commands [(re-parse cmd)]})))
+
+(defn- command-response
+  "What cmd/handle-commands returns: the response, or the empty response
+   with the :error of a failed command."
+  [response]
+  (if (contains? response :error)
+    (assoc (dissoc cmd/initial-response :history) :error (:error response))
+    (:result response)))
+
 (defn handle-cmd
   "Executes a command through the mock DAL.
 
@@ -398,36 +450,17 @@
      :no-summary  true  — returns full event/effect maps, normalized via
                           normalize-item (strips infra metadata).
      :include-meta true — returns raw response with no normalization at all."
-  [{:keys [include-meta no-summary] :as ctx} {:keys [request-id
-                                                     interaction-id]
-                                              :as cmd}]
-  (try
-    (let [ctx (edd-ctx/init-features ctx)
-          ctx (cond-> ctx
-                request-id (assoc :request-id request-id)
-                interaction-id (assoc :interaction-id interaction-id))
-          resp (if (contains? cmd :commands)
-                 (when (or (= (:service-name ctx)
-                              (:service cmd))
-                           (= nil
-                              (:service cmd)))
-                   (cmd/handle-commands ctx
-                                        (re-parse cmd)))
-                 (cmd/handle-commands ctx
-                                      {:commands [(re-parse cmd)]}))]
-
-      (if include-meta
-        resp
-        (if no-summary
-          (let [keep-meta (get @*dal-state* :keep-meta false)
-                norm #(normalize-item % keep-meta)]
-            (-> resp
-                (update :events #(mapv norm %))
-                (update :effects #(mapv norm %))))
-          resp)))
-    (catch Exception ex
-      (log/error "CMD execution ERROR" ex)
-      (throw ex))))
+  [{:keys [include-meta no-summary] :as ctx} cmd]
+  (let [resp
+        (when-not (other-service? ctx cmd)
+          (command-response (run-request ctx (commands-request cmd))))]
+    (if (and no-summary resp (not include-meta))
+      (let [keep-meta (get @*dal-state* :keep-meta false)
+            norm #(normalize-item % keep-meta)]
+        (-> resp
+            (update :events #(mapv norm %))
+            (update :effects #(mapv norm %))))
+      resp)))
 
 (defn get-commands-response
   [ctx cmd]
@@ -442,9 +475,7 @@
     (log/debug "apply-cmd returned" (with-out-str (pprint/pprint resp)))
     (tap> resp)
     (doseq [id (distinct (map :id (:events resp)))]
-      (event/handle-event (assoc ctx
-                                 :apply {:aggregate-id id
-                                         :meta         (:meta ctx {})})))
+      (run-request ctx {:apply {:aggregate-id id}}))
     resp))
 
 (defn- local-service-cmd?
@@ -465,27 +496,27 @@
              (update-in state [:realms realm :command-store]
                         (fn [v] (into (or v []) commands)))))))
 
-(defn execute-fx [ctx]
-  (let [all-cmds (pop-state-raw :command-store)
-        {local true remote false}
-        (group-by #(local-service-cmd? ctx %) all-cmds)]
+(defn- pop-local-commands!
+  "Takes the effects out of the command store, those for other services
+   stay there."
+  [ctx]
+  (let [{local true remote false}
+        (group-by #(local-service-cmd? ctx %) (pop-state-raw :command-store))]
     (when (seq remote)
       (put-back-commands! remote))
-    (doall
-     (for [cmd local]
-       (handle-cmd ctx cmd)))))
+    local))
+
+(defn execute-fx [ctx]
+  (doall
+   (for [cmd (pop-local-commands! ctx)]
+     (handle-cmd ctx cmd))))
 
 (defn execute-fx-apply [ctx]
-  (let [all-cmds (pop-state-raw :command-store)
-        {local true remote false}
-        (group-by #(local-service-cmd? ctx %) all-cmds)]
-    (when (seq remote)
-      (put-back-commands! remote))
-    (doall
-     (for [{:keys [commands]} local]
-       (doall
-        (for [cmd commands]
-          (apply-cmd ctx cmd)))))))
+  (doall
+   (for [{:keys [commands]} (pop-local-commands! ctx)]
+     (doall
+      (for [cmd commands]
+        (apply-cmd ctx cmd))))))
 
 (defn execute-fx-apply-all
   "Executes all the side effects until the command store is empty"
@@ -504,14 +535,17 @@
 
 (defn apply-events
   [ctx id]
-  (event/handle-event (assoc ctx :apply {:aggregate-id id})))
+  (:result (run-request ctx {:apply {:aggregate-id id}})))
 
 (defn query
   [ctx query]
-  (let [ctx (edd-ctx/init-features ctx)]
-    (if (contains? query :query)
-      (query/handle-query ctx (re-parse query))
-      (query/handle-query ctx (re-parse {:query query})))))
+  (let [response
+        (run-request ctx (if (contains? query :query)
+                           (re-parse query)
+                           (re-parse {:query query})))]
+    (if (contains? response :error)
+      (select-keys response [:error])
+      (:result response))))
 
 (defn get-by-id
   "Retrieves aggregate by ID using event sourcing (replays events).

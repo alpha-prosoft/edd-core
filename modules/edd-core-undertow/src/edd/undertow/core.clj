@@ -4,9 +4,6 @@
             [clojure.tools.logging :as log]
             [edd.ctx :as edd-ctx]
             [edd.distribution :as distribution]
-            [lambda.ctx :as lambda-ctx]
-            [lambda.logging.state :as log-state]
-            [lambda.request :as request]
             [lambda.util :as util]
             [lambda.uuid :as uuid])
   (:import [io.undertow Undertow Undertow$ListenerInfo]
@@ -66,16 +63,9 @@
     (with-open [out (.getOutputStream exchange)]
       (.write out (response-bytes response)))))
 
-(defmacro ^:private with-request-scope
-  [cache & body]
-  `(binding [util/*cache* ~cache
-             request/*request* (atom {:scoped true})
-             log-state/*invocation-start-ns* (System/nanoTime)]
-     ~@body))
-
 (defn- handle-exchange
   [ctx-fn cache ^HttpServerExchange exchange]
-  (with-request-scope cache
+  (runtime/with-invocation cache {:scoped true}
     (try
       (let [ctx
             (assoc (ctx-fn) :invocation-id (uuid/gen))
@@ -93,7 +83,7 @@
   "Handles one queue record like a Lambda SQS trigger, including response
    distribution. Returns true when it succeeded."
   [ctx-fn cache record]
-  (with-request-scope cache
+  (runtime/with-invocation cache {:scoped true}
     (try
       (let [ctx
             (assoc (ctx-fn) :invocation-id (uuid/gen))
@@ -125,8 +115,7 @@
 
 (defn start
   "HTTP runtime with the same contract as the Lambda custom runtime,
-   so a service registers once and runs on Lambda or Undertow. Usable
-   directly or via lambda.core/start with -Dedd.runtime=edd.undertow.core/start.
+   so a service registers once and runs on Lambda or Undertow.
 
    HTTP requests go through lambda.http. Responses are distributed to the
    router like on Lambda, and the service's command and event sources are
@@ -140,13 +129,13 @@
   (let [cache
         (atom {})
 
-        with-runtime
-        (cond-> (runtime/init init-ctx handler (select-keys opts [:filters :post-filter]))
+        consuming
+        (cond-> init-ctx
           (some? consume) (assoc :edd/consume consume))
 
         ctx
         (binding [util/*cache* cache]
-          (edd-ctx/init-features (lambda-ctx/init with-runtime)))
+          (runtime/start consuming handler (select-keys opts [:filters :post-filter])))
 
         ctx-fn
         (fn []

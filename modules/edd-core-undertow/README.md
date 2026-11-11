@@ -7,8 +7,6 @@ same contract as the Lambda custom runtime, so one registration serves both:
 (undertow/start ctx edd/handler)
 ```
 
-or through `lambda.core/start` with `-Dedd.runtime=edd.undertow.core/start`.
-
 - HTTP requests go through `lambda.http` like API Gateway requests on Lambda:
   the user comes from the authentication feature (e.g. `aws.cognito/register`).
   `Port`/`Host` env vars, default `0.0.0.0:8080`.

@@ -22,11 +22,10 @@
   net.mikera/vectorz-clj                 {:mvn/version "0.48.0"}
   net.mikera/core.matrix                 {:mvn/version "0.63.0"}
   org.slf4j/slf4j-api                    {:mvn/version "2.0.17"}
-  io.forward/yaml                        {:mvn/version "1.0.11"}
   com.github.clj-easy/graal-build-time   {:mvn/version "1.0.5"}
   org.clojure/core.async                 {:mvn/version "1.9.865"}}
  :paths
- ["src" "resources"]
+ ["src" "resources" "sql"]
  :aliases
  {:build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.13"}}
           :ns-default build}

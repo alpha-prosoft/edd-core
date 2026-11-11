@@ -2,7 +2,7 @@
   (:require [aws.filters :as aws-filters] [clojure.test :refer [deftest is]]
             [edd.distribution.memory :as memory-distribution]
             [lambda.util :as util]
-            [lambda.core :as core]
+            [aws.lambda :as core]
             [lambda.test.fixture.core :refer [mock-core]]
             [lambda.test.fixture.client :refer [verify-traffic-edn]]
             [clojure.tools.logging :as log]
@@ -53,7 +53,7 @@
        :requests [{:get  (str "https://example-bucket.s3.eu-central-1.amazonaws.com/"
                               key)
                    :body (char-array "Of something")}]
-       (core/start
+       (core/lambda-custom-runtime
         (memory-distribution/register {})
         (fn [ctx body]
           ;; "Slurp content of S3 request into response"
@@ -106,7 +106,7 @@
        :requests [{:get  (str "https://example-bucket.s3.eu-central-1.amazonaws.com/"
                               key)
                    :body (char-array "Of something")}]
-       (core/start
+       (core/lambda-custom-runtime
         (memory-distribution/register {})
         edd/handler
         :filters [aws-filters/from-bucket])

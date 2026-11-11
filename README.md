@@ -19,7 +19,7 @@ you from doing anything else (e.g. using a DB connection directly).
 Generate a service with the scaffold (`modules/edd-core-scaffold`):
 
 ```bash
-clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.340.0"}}}' \
+clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.341.0"}}}' \
   -M -m edd.scaffold my-svc
 ```
 
@@ -40,6 +40,8 @@ use the same version.
 | `edd-java-lambda-runtime` | Lambda Java runtime with SnapStart |
 | `edd-core-undertow` | Long-running HTTP runtime that also consumes the service queues |
 | `edd-core-sqs` / `edd-core-kafka` | Transports for effects and router messages |
+| `edd-core-distributor-postgres` | Transport for a single service on the Postgres event store: an outbox, no router |
+| `edd-core-flyway` | Runs the migrations the registered components declare, at startup |
 | `edd-router` | Router service entry point |
 | `edd-core-client` | HTTP client and the HTTP resolver for remote deps |
 | `edd-core-security` | Role-based authorization |
@@ -87,11 +89,9 @@ is triggered for a command that failed or rolled back.
 
 ### Runtimes and filters
 
-A runtime runs a handler, `(fn [ctx request] response)`. Pick it explicitly:
-call the runtime's own start (`aws.lambda/lambda-custom-runtime`,
-`edd.undertow.core/start`, `edd.java-lambda-runtime.core/start`) or
-`lambda.core/start` with `:edd/runtime` / `-Dedd.runtime`. There is no
-default runtime.
+A runtime runs a handler, `(fn [ctx request] response)`. The service starts
+the runtimes it runs on itself, one or several: `edd.undertow.core/start`,
+`aws.lambda/lambda-custom-runtime`, `edd.java-lambda-runtime.core/start`.
 
 Each runtime decodes its input the same way: HTTP requests (API Gateway on
 Lambda, Undertow) go through `lambda.http`, which answers `/health`,
@@ -120,8 +120,8 @@ flowchart LR
 ```
 
 ```clojure
-(lambda.core/start
- (assoc ctx :edd/runtime "edd.undertow.core/start")
+(edd.undertow.core/start
+ ctx
  edd.core/handler
  :filters [aws.filters/from-bucket])
 ```
@@ -145,9 +145,7 @@ flowchart LR
   [ctx request]
   {:echo request})
 
-(lambda.core/start
- (assoc ctx :edd/runtime "aws.lambda/lambda-custom-runtime")
- handler)
+(aws.lambda/lambda-custom-runtime ctx handler)
 ```
 
 It needs no distributor.
@@ -163,7 +161,7 @@ It needs no distributor.
     (log/info "handled" (:request-id request))
     response))
 
-(lambda.core/start ctx edd.core/handler :filters [aws.filters/from-bucket audit])
+(edd.undertow.core/start ctx edd.core/handler :filters [aws.filters/from-bucket audit])
 ```
 
 ### Distribution
@@ -174,6 +172,21 @@ registers one transport: `edd.sqs.distributor/register`,
 tests (`mock/ctx` already has it). The router registers the same transport and
 runs `edd.router.core/handler`. Without a transport every request to
 `edd.core/handler` fails with `No distributor registered`.
+
+A single service on the Postgres event store needs neither router nor queues:
+`(edd.postgres.distributor/register ctx)` (edd-core-distributor-postgres)
+delivers its events and effects to the service itself from an outbox in the
+same database. The outbox is a schema of its own per realm,
+`<realm>_distributor`.
+
+A service that owns its database migrates it at startup with
+`(edd.flyway/register ctx)` (edd-core-flyway): the Postgres event store, view
+store and distributor declare their migrations (`edd.ctx/put-migration`) and
+the feature runs them for every realm of `:realms` on ctx, `[:prod]` by default.
+The marker is written in the transaction of the command, a poller per realm
+delivers it and retries with backoff; after `:max-attempts` the marker stays
+with `failed_at` set. Undertow only, and an effect for another service fails
+the command.
 
 Responses travel to the router inline. A service with big responses registers
 a response cache, `(edd.response.s3/register ctx)`: the response is stored in
@@ -334,7 +347,7 @@ as an API request of a given user or as a batch of queue records:
 |---|---|
 | `make test-unit` | Unit tests |
 | `make it` | Pre-build setup (Docker, migrations) and integration tests |
-| `make e2e-local` | ping/pong/router on Undertow + Kafka + Postgres in docker compose |
+| `make e2e-local` | ping/pong/router on Undertow + Kafka + Postgres and mono-svc on the Postgres distributor, in docker compose |
 
 CI also deploys the same services on Lambda + SQS + DynamoDB + S3 and runs the
 same `e2e/it` suite against both.

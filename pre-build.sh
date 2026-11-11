@@ -476,7 +476,7 @@ EOF
   done
 
   # Loop 2: Service schemas (view store tables - aggregates, history, etc.)
-  # These use modules/edd-core-view-store-postgres/migrations + test migrations
+  # These use the view store migrations (module resources) + test migrations
   TEST_SCHEMAS=(
     "test_local_svc"
     "test_local_test"
@@ -486,6 +486,7 @@ EOF
     "test_glms_application_svc"
     "test_ping_svc"
     "test_pong_svc"
+    "test_mono_svc"
     "prod_test_service"
     "realm_a_test_service"
     "realm_b_test_service"
@@ -495,7 +496,7 @@ EOF
     "realm_2_test_service"
   )
 
-  SVC_VOLUMES="-v $(pwd)/modules/edd-core-view-store-postgres/migrations:/flyway/sql/prod -v $(pwd)/modules/edd-core-view-store-postgres/test/resources/migrations:/flyway/sql/test"
+  SVC_VOLUMES="-v $(pwd)/modules/edd-core-view-store-postgres/resources/edd/view_store/postgres/migrations:/flyway/sql/prod -v $(pwd)/modules/edd-core-view-store-postgres/test/resources/migrations:/flyway/sql/test"
   SVC_LOCATIONS="filesystem:/flyway/sql/prod,filesystem:/flyway/sql/test"
 
   echo -e "${YELLOW}Migrating service schemas (view store tables)...${NC}"

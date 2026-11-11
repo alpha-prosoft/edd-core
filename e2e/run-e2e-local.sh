@@ -3,7 +3,9 @@
 # Local end-to-end test: the same ping/pong/router services and the same e2e/it
 # suite as run-e2e.sh, on Undertow + Kafka + Postgres in docker compose (profile
 # e2e) instead of Lambda + SQS + DynamoDB + S3. Postgres and Kafka come from the
-# root docker-compose.yaml, migrated by pre-build.sh.
+# root docker-compose.yaml, migrated by pre-build.sh. mono-svc is a single
+# service on the Postgres distributor (no router, no Kafka), rendered from
+# its scaffold definition e2e/mono-svc/scaffold.json.
 #
 #   run-e2e-local.sh build   render ping-svc, build the three jars into e2e/target/local
 #   run-e2e-local.sh up      start the services and the gateway, wait until they answer
@@ -27,7 +29,8 @@ JARS_DIR="${E2E_DIR}/target/local"
 PING_DIR="${E2E_DIR}/target/ping-svc-local"
 API_URL="${E2E_LOCAL_API_URL:-http://127.0.0.1:8085}"
 ENV_NAME="cqrs-e2e"
-SERVICES=(ping-svc pong-svc router-svc gateway)
+MONO_DIR="${E2E_DIR}/target/mono-svc-local"
+SERVICES=(ping-svc pong-svc router-svc mono-svc gateway)
 CLOJURE_IMAGE="${DOCKER_URL:-}clojure:temurin-21-tools-deps-1.12.6.1673-bookworm-slim"
 BUILD_ALIAS='{:aliases {:build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}} :ns-default build}}}'
 
@@ -56,7 +59,7 @@ build() {
   fi
 
   log "Rendering ping-svc (undertow, kafka, postgres) into ${PING_DIR}"
-  rm -rf "${PING_DIR}" "${JARS_DIR}"
+  rm -rf "${PING_DIR}" "${MONO_DIR}" "${JARS_DIR}"
   mkdir -p "${JARS_DIR}"
   ( cd "${ROOT_DIR}/modules/edd-core-scaffold" \
     && clojure -M -m edd.scaffold ping-svc \
@@ -69,7 +72,18 @@ build() {
   ( cd "${PING_DIR}" && clojure -M:test:unit </dev/null )
   ok "Rendered ping-svc passes its generated tests"
 
+  log "Rendering mono-svc from e2e/mono-svc/scaffold.json into ${MONO_DIR}"
+  ( cd "${ROOT_DIR}/modules/edd-core-scaffold" \
+    && clojure -M -m edd.scaffold \
+         --config "${E2E_DIR}/mono-svc/scaffold.json" \
+         --dir "${MONO_DIR}" \
+         --edd-core-root "${ROOT_DIR}" </dev/null )
+  cp -r "${E2E_DIR}/mono-svc/." "${MONO_DIR}/"
+  ( cd "${MONO_DIR}" && clojure -M:test:unit </dev/null )
+  ok "Rendered mono-svc passes its generated tests"
+
   uber "${PING_DIR}" ping-svc.main ping-svc
+  uber "${MONO_DIR}" mono-svc.main mono-svc
   uber "${E2E_DIR}/pong-svc" pong.local pong-svc
   uber "${E2E_DIR}/router-svc" router.local router-svc
   ok "Jars in ${JARS_DIR}"
@@ -98,7 +112,7 @@ up() {
   [ -f "${JARS_DIR}/ping-svc.jar" ] || { err "No jars in ${JARS_DIR}, run build first"; exit 1; }
   create-topics
   compose up -d --force-recreate "${SERVICES[@]}"
-  for svc in ping-svc pong-svc; do
+  for svc in ping-svc pong-svc mono-svc; do
     log "Waiting for ${svc}"
     local n=0
     until [ "$(query-status "${svc}")" = "200" ]; do
@@ -117,7 +131,7 @@ up() {
 run-tests() {
   log "Running e2e/it against ${API_URL}"
   if ! ( cd "${E2E_DIR}/it" && ApiUrl="${API_URL}" clojure -M:it --skip-meta :aws ); then
-    compose logs --tail 200 ping-svc pong-svc router-svc || true
+    compose logs --tail 200 ping-svc pong-svc router-svc mono-svc || true
     exit 1
   fi
   ok "All local E2E tests passed"

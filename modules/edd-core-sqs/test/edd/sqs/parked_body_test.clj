@@ -3,7 +3,7 @@
             [edd.core :as edd]
             [edd.el.cmd :as el-cmd]
             [edd.sqs.distributor :as sqs-distributor]
-            [lambda.core :as core]
+            [aws.lambda :as core]
             [lambda.test.fixture.core :refer [mock-core]]
             [lambda.util :as util]
             [lambda.uuid :as uuid]
@@ -60,7 +60,7 @@
                                   key)
                        :body (char-array (util/to-json
                                           payload))}]
-           (core/start
+           (core/lambda-custom-runtime
             (sqs-distributor/register {})
             edd/handler
             :filters [])

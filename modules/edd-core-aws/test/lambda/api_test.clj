@@ -1,7 +1,7 @@
 (ns lambda.api-test
   (:require [aws.cognito :as cognito] [aws.filters :as aws-filters] [clojure.test :refer [deftest is]]
             [edd.distribution.memory :as memory-distribution]
-            [lambda.core :as core]
+            [aws.lambda :as core]
             [lambda.http :as http]
             [lambda.jwt-test :as jwt-test]
             [lambda.test.fixture.client :as client :refer [verify-traffic-edn]]
@@ -381,7 +381,7 @@
    :env {"Region" "eu-west-1"}
    :invocations [(api-request-m2m (assoc dummy-cmd
                                          :user {:selected-role :users}))]
-   (core/start
+   (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [ctx body]
       {:source body
@@ -419,7 +419,7 @@
    :env {"Region" "eu-west-1"}
    :invocations [(api-request-cognito (assoc dummy-cmd
                                              :user {:selected-role :users}))]
-   (core/start
+   (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [ctx body]
       {:source body
@@ -456,7 +456,7 @@
   (mock-core
    :env {"Region" "eu-west-1"}
    :invocations [(api-request dummy-cmd)]
-   (core/start
+   (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [ctx body]
       {:source body
@@ -487,7 +487,7 @@
   (mock-core
    :env {"Region" "eu-west-1"}
    :invocations [(api-request-base64 dummy-cmd)]
-   (core/start
+   (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [ctx body]
       {:source body
@@ -515,7 +515,7 @@
 (deftest api-handler-invalid-token-test
   (mock-core
    :invocations [(api-request dummy-cmd :token "")]
-   (core/start
+   (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [ctx body]
       {:source body
@@ -540,7 +540,7 @@
   (mock-core
    :env {"Region" "eu-west-1"}
    :invocations [(api-request dummy-cmd)]
-   (core/start
+   (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [_ctx _body]
       {:error "Some error"}))
@@ -564,7 +564,7 @@
   (mock-core
    :invocations [(api-request dummy-cmd)]
    :env {"Region" "eu-west-1"}
-   (core/start
+   (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [_ctx _body]
       (throw (new RuntimeException "Some error"))))
@@ -595,7 +595,7 @@
   (mock-core
    :invocations [(api-request dummy-cmd
                               :path "/health")]
-   (core/start
+   (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [_ctx _body]
       {:healthy false}))
@@ -620,7 +620,7 @@
   (mock-core
    :invocations [(api-request dummy-cmd
                               :http-method "OPTIONS")]
-   (core/start
+   (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [_ctx _body]
       {:healthy false}))
@@ -647,7 +647,7 @@
                          {:a :b
                           :c :d})}
    :invocations [(util/to-json {})]
-   (core/start
+   (core/lambda-custom-runtime
     (cognito/register (memory-distribution/register {}))
     (fn [ctx body]
       (is (= {:a :b

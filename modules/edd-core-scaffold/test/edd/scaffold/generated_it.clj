@@ -9,7 +9,8 @@
 (def combinations
   [{:runtime ["lambda"] :distributor "sqs" :event-store "dynamodb" :view-store "s3" :deploy "ansible"}
    {:runtime ["undertow"] :distributor "kafka" :event-store "memory" :view-store "elastic" :deploy "none"}
-   {:runtime ["lambda" "undertow"] :distributor "sqs" :event-store "postgres" :view-store "postgres" :deploy "none"}])
+   {:runtime ["lambda" "undertow"] :distributor "sqs" :event-store "postgres" :view-store "postgres" :deploy "none"}
+   {:runtime ["undertow"] :distributor "postgres" :event-store "postgres" :view-store "postgres" :deploy "none"}])
 
 (defn- sh!
   [dir & command]

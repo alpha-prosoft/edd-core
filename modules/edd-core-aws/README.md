@@ -14,5 +14,5 @@ EMF metrics (`edd.aws-emf.core`) and Cognito.
 
 - `aws.filters/from-bucket` is a runtime filter turning S3 upload notifications
   (direct or through SQS) into `:object-uploaded` commands.
-- `lambda.core/start` defaults to the custom runtime (`aws.lambda`); the Java
+- `aws.lambda/lambda-custom-runtime` is the Lambda custom runtime; the Java
   runtime with SnapStart is `edd-java-lambda-runtime`.

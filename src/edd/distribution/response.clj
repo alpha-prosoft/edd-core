@@ -158,6 +158,13 @@
     [cache-result]
     (seq cache-result)))
 
+(defn stored-response
+  "Events and effects of a stored response, rebuilt from its summary and
+   the command store."
+  [ctx summary]
+  {:events (stored-events ctx summary)
+   :effects (dal/get-response-effects ctx)})
+
 (defn queue-stored-response!
   "A duplicate request sends its router payloads again, so effects of a
    request whose distribution failed are not lost: the cache references
@@ -166,10 +173,7 @@
   [ctx summary]
   (queue! (if-let [references (stored-references summary)]
             (mapv util/to-json references)
-            (payloads ctx
-                      (:service-name ctx)
-                      {:events (stored-events ctx summary)
-                       :effects (dal/get-response-effects ctx)}))))
+            (payloads ctx (:service-name ctx) (stored-response ctx summary)))))
 
 (defn records-body
   [payload-json]

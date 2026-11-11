@@ -5,8 +5,7 @@
     msg: "Playbook dir: {{ playbook_dir }}"
 
 - shell: |
-    mkdir -p "{{ role_path }}/migrations"
-    ls -la "{{ role_path }}/migrations"
+    ls -la "{{ role_path }}/resources/edd/view_store/postgres/migrations"
   register: global_migrations
 
 - debug:
@@ -25,7 +24,7 @@
   s3_sync:
     region: "{{ parameters['Region'] }}"
     bucket: "{{ parameters['DeploymentS3BucketName'] }}"
-    file_root: "{{ role_path }}/migrations"
+    file_root: "{{ role_path }}/resources/edd/view_store/postgres/migrations"
     key_prefix: "migrations/postgres/{{ parameters['ResourceName'] }}/global"
     file_change_strategy: force
     delete: true
