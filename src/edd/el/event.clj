@@ -90,7 +90,7 @@
                           (format "Rebuilding aggregate state, id: %s, events: %s" id (count events))
                           (let [aggregate (create-aggregate snapshot events (:def-apply ctx))
                                 result-agg (apply-agg-filter ctx aggregate)]
-                            result-agg))
+                            (annotate-aggregate result-agg snapshot events)))
     :else (or snapshot
               nil)))
 

@@ -2,6 +2,24 @@
 
 ## Changes
 
+**[AP-1060]** Tests read aggregates as stored
+- every request of mock/with-mock-dal (handle-cmd, apply-cmd, query,
+  execute-fx) starts with its own request state like on a runtime;
+  before, the aggregate a command cached in memory was returned to
+  every later request of the test, so sets and other values JSON
+  does not keep survived only in tests
+- tests relying on that now fail: a set an event handler builds
+  comes back as a vector
+- queue records of one batch (Lambda SQS) read their aggregates from
+  the stores, so a batch behaves like its records handled one by
+  one; commands of one request still share the aggregate
+- the memory event store writes everything as JSON and reads it
+  back: events, effects, identities, request and response log
+- aggregates rebuilt from events get :meta :annotations; they were
+  only set on the command's cached aggregate and never reached the
+  view store
+- AGENTS.md: don't put sets into stored data
+
 **[AP-1035]** Authentication as runtime filter, Undertow listeners
 - authentication is a runtime filter in the ordered :filters vector:
   (lambda.http/authenticate resolve-user), aws.cognito/authenticate

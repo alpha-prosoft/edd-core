@@ -404,9 +404,12 @@
 
 (defn- run-request
   "Response of the request on the mock runtime, handled with ctx; ids
-   default to those of ctx. Throws what the handler threw."
+   default to those of ctx. Throws what the handler threw. Like on every
+   runtime the request starts with its own request state, so it reads
+   aggregates as they were stored, not as an earlier request left them in
+   memory; the state stays readable until the next request."
   [ctx request]
-  (swap! request/*request* #(assoc (dissoc % :throwable) :keep-throwable true))
+  (swap! request/*request* #(assoc (select-keys % [:scoped]) :keep-throwable true))
   (let [runtime-ctx
         (merge (edd-ctx/init-features ctx)
                (select-keys (or *runtime* (start-runtime ctx)) [:handler :filters]))

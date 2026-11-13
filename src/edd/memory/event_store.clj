@@ -62,6 +62,8 @@
              (update-in state [:realms realm store-key] update-fn)))))
 
 (defn fix-keys
+  "val as a store returns it: written as JSON and read back, so what JSON
+   does not keep (sets, lists, non-keyword keys) is lost here as well."
   [val]
   (-> val
       (util/to-json)
@@ -89,7 +91,7 @@
   (util/d-time
    (format "MemoryEventStore store-identity, id: %s" (:id identity))
    (let [identity-with-service
-         (assoc identity :service-name (:service-name ctx))
+         (fix-keys (assoc identity :service-name (:service-name ctx)))
 
          store
          (get-realm-store ctx :identity-store)]
@@ -127,9 +129,11 @@
   [ctx cmd]
   (util/d-time
    (format "MemoryEventStore store-cmd, request-id: %s" (:request-id cmd))
-   (update-realm-store! ctx :command-store
-                        (fn [v] (conj (or v []) (clean-commands cmd))))
-   (enqueue-cmd! cmd)))
+   (let [stored
+         (fix-keys cmd)]
+     (update-realm-store! ctx :command-store
+                          (fn [v] (conj (or v []) (clean-commands stored))))
+     (enqueue-cmd! stored))))
 
 (defn get-stored-commands
   []
@@ -160,7 +164,7 @@
      (when (event-conflict? store event)
        (throw (event-conflict-error event)))
      (update-realm-store! ctx :event-store
-                          (fn [v] (conj (or v []) event))))))
+                          (fn [v] (conj (or v []) (fix-keys event)))))))
 
 (defn- duplicated-within-batch
   [items key-fn]
@@ -330,7 +334,7 @@
          (when (:request-id body)
            (count (filter same-request? (get-realm-store ctx :command-log))))]
      (update-realm-store! ctx :command-log
-                          (fn [v] (conj (or v []) body)))
+                          (fn [v] (conj (or v []) (fix-keys body))))
      attempt)))
 
 (defmethod log-request
@@ -356,7 +360,7 @@
    (update-realm-store! ctx :response-log
                         (fn [v] (conj (or v []) {:request-id  request-id
                                                  :breadcrumbs breadcrumbs
-                                                 :data        response-summary})))))
+                                                 :data        (fix-keys response-summary)})))))
 
 (defmethod with-init
   :memory

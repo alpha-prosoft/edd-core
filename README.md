@@ -19,7 +19,7 @@ you from doing anything else (e.g. using a DB connection directly).
 Generate a service with the scaffold (`modules/edd-core-scaffold`):
 
 ```bash
-clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.342.0"}}}' \
+clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.343.0"}}}' \
   -M -m edd.scaffold my-svc
 ```
 

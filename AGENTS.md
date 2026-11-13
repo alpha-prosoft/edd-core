@@ -386,7 +386,7 @@ every queue record. `:resolve-user (fn [ctx request])` picks another user.
 stores, deployment), see its README:
 
 ```bash
-clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.342.0"}}}' \
+clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.343.0"}}}' \
   -M -m edd.scaffold my-svc
 ```
 
@@ -751,6 +751,11 @@ execution has no `:meta`.
 8. **Schemas**: Define Malli schemas for all commands and queries
 9. **Module Pattern**: One `register` function per namespace
 10. **Event Naming**: Past tense (`:created`, `:updated`, `:failed`)
+11. **Stored data is JSON**: Events, aggregates, effects and responses are
+    written as JSON and read back, so a set returns as a vector (lists and
+    non-keyword map keys are lost the same way). Don't put sets into them;
+    keep vectors and build the set where it is needed: `(set (:tags agg))`.
+    Tests on the mock DAL store and load the same way.
 
 ## Database Tables (Automatic)
 

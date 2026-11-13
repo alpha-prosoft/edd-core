@@ -11,6 +11,7 @@
   (:require [clojure.tools.logging :as log]
             [edd.ctx :as edd-ctx]
             [edd.distribution :as distribution]
+            [edd.request-cache :as request-cache]
             [lambda.ctx :as lambda-ctx]
             [lambda.logging.state :as log-state]
             [lambda.request :as request]
@@ -133,13 +134,17 @@
 (defn handle-records
   "Handles queue records in order, each body as one request with the
    record in ctx :record, and stops at the first failure. Returns the
-   responses of the handled records."
+   responses of the handled records. Every record reads its aggregates from
+   the stores, so a batch behaves like its records handled one by one."
   [ctx records]
   (loop [[record & more] records
          responses []]
     (if-not record
       responses
-      (let [response
+      (let [_
+            (request-cache/clear)
+
+            response
             (handle-with ctx #(handle (assoc ctx :record record)
                                       (distribution/unwrap ctx (util/to-edn (:body record)))))
 

@@ -4,7 +4,7 @@ Generates a working edd-core service: it compiles, passes its own tests and
 runs on the chosen runtime.
 
 ```bash
-clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.342.0"}}}' \
+clojure -Sdeps '{:deps {com.alpha-prosoft/edd-core-scaffold {:mvn/version "2.343.0"}}}' \
   -M -m edd.scaffold my-svc
 ```
 
